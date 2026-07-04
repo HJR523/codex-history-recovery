@@ -249,6 +249,43 @@ The backup includes:
 - archived sessions
 - manifest.json
 
+## Backup Cleanup
+
+Backup folders are only used when you need to roll back to the pre-restore state. Codex does not need these backups for normal operation. After confirming that your sidebar chat history has been restored correctly, you can manually remove old backups.
+
+It is recommended to keep at least the latest 1-2 backups. For manual cleanup, open this folder in File Explorer:
+
+```text
+%USERPROFILE%\.codex
+```
+
+Only delete folders whose names look like this:
+
+```text
+backup-YYYYMMDD-HHMMSS-pre-chat-history-restore
+```
+
+Do not delete the entire `.codex` folder.
+
+You can also list existing backups with PowerShell first:
+
+```powershell
+Get-ChildItem "$env:USERPROFILE\.codex" -Directory -Filter "backup-*-pre-chat-history-restore" |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object Name, LastWriteTime, FullName
+```
+
+Keep the latest 2 backups and remove older ones:
+
+```powershell
+Get-ChildItem "$env:USERPROFILE\.codex" -Directory -Filter "backup-*-pre-chat-history-restore" |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -Skip 2 |
+  Remove-Item -Recurse
+```
+
+To preview what would be deleted first, temporarily change the last line to `Remove-Item -Recurse -WhatIf`.
+
 ## Verification Criteria
 
 After restore, the tool prints verification metrics.

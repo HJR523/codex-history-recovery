@@ -248,6 +248,43 @@ thread_source='user'
 - archived sessions
 - manifest.json
 
+## 备份清理
+
+备份文件夹只用于在需要时回滚到恢复前状态，Codex 正常运行不依赖这些备份。确认侧边栏聊天记录已经恢复正常后，可以手动清理旧备份。
+
+建议至少保留最新 1-2 个备份。手动清理时，可以在资源管理器中打开：
+
+```text
+%USERPROFILE%\.codex
+```
+
+只删除名称类似下面格式的文件夹：
+
+```text
+backup-YYYYMMDD-HHMMSS-pre-chat-history-restore
+```
+
+不要删除整个 `.codex` 文件夹。
+
+也可以用 PowerShell 先查看已有备份：
+
+```powershell
+Get-ChildItem "$env:USERPROFILE\.codex" -Directory -Filter "backup-*-pre-chat-history-restore" |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object Name, LastWriteTime, FullName
+```
+
+保留最新 2 个备份，清理更旧的备份：
+
+```powershell
+Get-ChildItem "$env:USERPROFILE\.codex" -Directory -Filter "backup-*-pre-chat-history-restore" |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -Skip 2 |
+  Remove-Item -Recurse
+```
+
+如果想先预览将要删除哪些备份，可以把最后一行临时改成 `Remove-Item -Recurse -WhatIf`。
+
 ## 验证标准
 
 恢复完成后，工具会输出验证指标。
