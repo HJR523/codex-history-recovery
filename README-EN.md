@@ -2,6 +2,10 @@
 
 A local recovery tool for restoring missing chat threads in the Codex desktop sidebar.
 
+## Interface Screenshot
+
+![Codex History Recovery interface](docs/images/codex-recovery-console.png)
+
 ## Use Case
 
 If you switch Codex login or authentication methods on the same computer, your old chats may still exist locally, but they may disappear from the Codex desktop sidebar.

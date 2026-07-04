@@ -2,6 +2,10 @@
 
 一个用于恢复 Codex 桌面端侧边栏聊天记录的本地工具。
 
+## 界面截图
+
+![Codex History Recovery 主界面](docs/images/codex-recovery-console.png)
+
 ## 使用场景
 
 如果你在同一台电脑上切换过 Codex 的登录方式，例如从一种账号/授权方式切到另一种，可能会发现：以前的聊天内容其实还在本机，但 Codex 桌面端左侧边栏突然看不到了。
