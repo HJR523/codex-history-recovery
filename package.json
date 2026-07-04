@@ -1,0 +1,39 @@
+{
+  "name": "codex-history-recovery",
+  "version": "2.0.0",
+  "description": "Modern desktop UI for restoring Codex sidebar chat history.",
+  "main": "server.cjs",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "keywords": [
+    "codex",
+    "chat-history",
+    "recovery",
+    "sqlite",
+    "react",
+    "tailwind"
+  ],
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "start": "node server.cjs",
+    "app": "npm run build && npm run start"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.11.1",
+    "lucide-react": "^1.23.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.0.3",
+    "autoprefixer": "^10.5.2",
+    "postcss": "^8.5.16",
+    "tailwindcss": "^3.4.17",
+    "vite": "^8.1.3"
+  }
+}
