@@ -161,7 +161,7 @@ Creating an empty chat may also work, but it is less reliable than sending a mes
 
 If you do not want to send a test message, you can try creating an empty chat first, confirm that it appears in the Codex sidebar, then click the scan button and the latest-chat button. If the button does not fill the expected value, send a short message in the new chat and scan again.
 
-If you cannot create or send a chat right now but you know you are signed in with a GPT/ChatGPT account, the Target Provider is usually `openai`. You can use `openai` as a candidate value and click only `Check Plan` to validate the match; apply the restore only after the plan looks correct. When restore starts, the tool syncs `config.toml` to that Target Provider. If you use a custom provider, API key, or local provider, use the provider that is actually active for your setup.
+If you are signed in with a GPT/ChatGPT account, the Target Provider is usually `openai`. If you use a custom provider, API key, or local provider, enter the provider that is actually active for your setup. When restore starts, the tool syncs `config.toml` to that Target Provider.
 
 You usually do not need to query it manually. The tool reads `state_5.sqlite` directly and can fill Target Provider from the latest user chat.
 
@@ -373,7 +373,7 @@ Check:
 
 Create a new Codex chat that appears in the sidebar, then return to this tool, scan the state, and click the latest-chat button next to `Target Provider`.
 
-If you cannot create or send a chat but you know you are signed in with a GPT/ChatGPT account, you can use `openai` as a Target Provider candidate and click only `Check Plan` to see whether old chats are matched. Click `Start Restore` only after the plan looks correct; `config.toml` is synced when restore starts.
+If you are signed in with a GPT/ChatGPT account, the Target Provider is usually `openai`. If you use a custom provider, API key, or local provider, enter the provider that is actually active for your setup. When restore starts, the tool syncs `config.toml` to that Target Provider.
 
 ## Development
 
