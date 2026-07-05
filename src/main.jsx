@@ -22,9 +22,11 @@ async function postJson(url, payload = {}) {
 const browserApi = {
   getDefaults: () => postJson('/api/defaults'),
   selectFolder: async () => window.prompt('请输入 Codex root 路径，例如 C:\\Users\\你\\.codex') || null,
+  backups: (payload) => postJson('/api/backups', payload),
   scan: (payload) => postJson('/api/scan', payload),
   plan: (payload) => postJson('/api/plan', payload),
   apply: (payload) => postJson('/api/apply', payload),
+  restoreBackup: (payload) => postJson('/api/restore-backup', payload),
 };
 
 const api = window.historyRecovery ?? browserApi;
@@ -215,12 +217,15 @@ function App() {
   const [plan, setPlan] = useState(null);
   const [applyResult, setApplyResult] = useState(null);
   const [defaultsInfo, setDefaultsInfo] = useState(null);
+  const [backups, setBackups] = useState([]);
+  const [selectedBackup, setSelectedBackup] = useState('');
   const [busy, setBusy] = useState('');
   const [status, setStatus] = useState({ tone: 'info', text: '系统就绪，等待配置路径' });
   const [logs, setLogs] = useState([{ time: now(), text: 'System ready. Awaiting parameters...' }]);
 
   const providerOptions = scan?.providers ?? [];
   const latestProvider = scan?.latestUser?.model_provider ?? '';
+  const selectedBackupInfo = backups.find((item) => item.path === selectedBackup);
   const rootHint = defaultsInfo?.root === root ? (defaultsInfo.rootExists ? '已自动检测' : '需确认') : root ? '已填写' : '未填写';
   const stateDbReady = Boolean(defaultsInfo?.root === root && defaultsInfo.rootExists);
   const stateDbStatus = stateDbReady ? '已就绪' : root ? '待确认' : '未就绪';
@@ -270,6 +275,7 @@ function App() {
     setDefaultsInfo(data);
     setRoot(data.root || '');
     resetPlan();
+    if (data.rootExists) refreshBackups(data.root, false);
     if (showStatus) {
       setStatus({ tone: data.rootExists ? 'good' : 'warn', text: data.rootExists ? '已重新检测目录' : '已检测目录，请确认 Root' });
       log(`Defaults detected: root=${data.root || '(empty)'}, sqliteEngine=${data.sqliteEngine || 'bundled'}`);
@@ -288,6 +294,8 @@ function App() {
     setTarget('');
     setOldProviders([]);
     setIncludeSubagents(null);
+    setBackups([]);
+    setSelectedBackup('');
     resetPlan();
   }
 
@@ -296,6 +304,23 @@ function App() {
     if (selected) {
       updateRoot(selected);
       setDefaultsInfo((data) => data ? { ...data, root: selected } : data);
+      refreshBackups(selected, false);
+    }
+  }
+
+  async function refreshBackups(currentRoot = root, showStatus = true) {
+    const nextRoot = String(currentRoot || '').trim();
+    if (!nextRoot) {
+      warn('请先填写 Root Directory');
+      return;
+    }
+    const data = await call('backups', () => api.backups({ root: nextRoot }));
+    if (!data) return;
+    setBackups(data.backups || []);
+    setSelectedBackup((value) => (data.backups || []).some((item) => item.path === value) ? value : data.backups?.[0]?.path || '');
+    if (showStatus) {
+      setStatus({ tone: data.backups?.length ? 'good' : 'warn', text: data.backups?.length ? '已刷新备份列表' : '没有找到备份' });
+      log(`Backups found: ${data.backups?.length || 0}`);
     }
   }
 
@@ -313,6 +338,10 @@ function App() {
     resetPlan();
     setStatus({ tone: 'good', text: '扫描完成，请配置参数' });
     log(`Found providers: ${data.providers.join(', ') || '(none)'}`);
+    if (data.configModelProvider && data.suggestedTarget && data.configModelProvider !== data.suggestedTarget) {
+      log(`[WARN] config.toml=${data.configModelProvider}, suggested target=${data.suggestedTarget}; config will be synced to the confirmed Target Provider during restore.`);
+    }
+    refreshBackups(data.root || root, false);
   }
 
   function useLatestProvider() {
@@ -395,7 +424,11 @@ function App() {
 
   async function handleApply() {
     if (!plan) return;
-    const yes = window.confirm(`确认开始恢复？\n\n执行前会自动备份 Codex 状态。\nTarget Provider: ${target.trim()}\n需处理线程: ${plan.threadsToMigrate}\n需更新 JSONL: ${plan.jsonlToChange}`);
+    const targetProvider = target.trim();
+    const configSync = scan?.configModelProvider && scan.configModelProvider !== targetProvider
+      ? `\n配置文件将同步: ${scan.configModelProvider} -> ${targetProvider}`
+      : '';
+    const yes = window.confirm(`确认开始恢复？\n\n执行前会自动备份 Codex 状态。\nTarget Provider: ${targetProvider}\n需处理线程: ${plan.threadsToMigrate}\n需更新 JSONL: ${plan.jsonlToChange}${configSync}`);
     if (!yes) return;
     setStatus({ tone: 'info', text: '正在写入恢复数据...' });
     const data = await call('apply', () => api.apply(payload));
@@ -403,7 +436,30 @@ function App() {
     setApplyResult(data);
     setStatus({ tone: data.passed ? 'good' : 'warn', text: data.passed ? '恢复完成' : '恢复完成，有警告' });
     log(`Backup created: ${data.backup}`);
+    if (data.config?.changed) log(`Config synced: ${data.config.previous || '(empty)'} -> ${data.config.current}`);
+    else log(`Config already matches: ${data.config?.current || targetProvider}`);
     log(`Commit complete: JSONL=${data.jsonlChanged}, Index=${data.indexLines}`);
+    refreshBackups(root, false);
+  }
+
+  async function handleRestoreBackup() {
+    if (!selectedBackup) {
+      warn('请先选择一个备份');
+      return;
+    }
+    const label = selectedBackupInfo?.name || selectedBackup;
+    const yes = window.confirm(`确认从这个备份恢复？\n\n${label}\n\n工具会先备份当前状态，然后把所选备份写回 Codex 状态目录。建议先关闭或重启 Codex 桌面端，避免文件被占用。`);
+    if (!yes) return;
+    setStatus({ tone: 'info', text: '正在恢复备份...' });
+    const data = await call('restore-backup', () => api.restoreBackup({ root, backupPath: selectedBackup }));
+    if (!data) return;
+    setScan(null);
+    resetPlan();
+    setStatus({ tone: data.skipped?.length ? 'warn' : 'good', text: data.skipped?.length ? '备份已恢复，有文件跳过' : '备份已恢复' });
+    log(`Backup restored: ${data.backup}`);
+    log(`Safety backup created: ${data.safetyBackup}`);
+    log(`Restore complete: files=${data.restored}, skipped=${data.skipped?.length || 0}`);
+    refreshBackups(root, false);
   }
 
   const statusColors = {
@@ -498,6 +554,53 @@ function App() {
                   <Button disabled={!scan} onClick={handlePlan} className="col-span-1">检查方案</Button>
                   <Button tone="primary" disabled={!plan} onClick={handleApply} className="col-span-1">开始恢复</Button>
                 </div>
+              </div>
+            </div>
+
+            <div className="rounded-2xl bg-white/70 backdrop-blur-xl p-6 ring-1 ring-slate-200/60 shadow-glass hover:shadow-glass-hover transition-all relative">
+              <div className="mb-5 flex items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-[16px] font-bold text-slate-900">备份回滚</h2>
+                  <p className="mt-1 text-[12px] font-medium text-slate-500">从恢复前自动备份中还原 Codex 状态</p>
+                </div>
+                <Button tone="soft" onClick={() => refreshBackups(root)} busy={busy === 'backups'} className="h-9 px-3 text-[12px]">刷新备份</Button>
+              </div>
+
+              <div className="space-y-4">
+                <Field label="Backup Snapshot" hint={backups.length ? `${backups.length} 个备份` : '暂无备份'}>
+                  <select
+                    value={selectedBackup}
+                    onChange={(e) => setSelectedBackup(e.target.value)}
+                    className="h-10 w-full rounded-xl bg-white border border-slate-200/80 px-4 text-[13px] text-slate-900 shadow-sm outline-none transition-all hover:bg-slate-50 focus:border-blue-400 focus:ring-[3px] focus:ring-blue-100"
+                  >
+                    {backups.length ? backups.map((item) => (
+                      <option key={item.path} value={item.path}>
+                        {item.name}
+                      </option>
+                    )) : <option value="">请先刷新备份列表</option>}
+                  </select>
+                </Field>
+
+                <div className="rounded-xl border border-slate-200/70 bg-slate-50/70 px-4 py-3 text-[12px] text-slate-600">
+                  {selectedBackupInfo ? (
+                    <div className="space-y-1.5">
+                      <div className="flex justify-between gap-3">
+                        <span className="font-semibold text-slate-700">创建时间</span>
+                        <span className="text-right">{new Date(selectedBackupInfo.createdAt).toLocaleString()}</span>
+                      </div>
+                      <div className="flex justify-between gap-3">
+                        <span className="font-semibold text-slate-700">目标 Provider</span>
+                        <span className="max-w-[220px] truncate font-mono text-slate-800">{selectedBackupInfo.targetProvider || '-'}</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <span className="font-medium text-slate-400">选择备份后显示详情</span>
+                  )}
+                </div>
+
+                <Button tone="danger" disabled={!selectedBackup} busy={busy === 'restore-backup'} onClick={handleRestoreBackup} className="w-full">
+                  恢复此备份
+                </Button>
               </div>
             </div>
           </div>

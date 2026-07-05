@@ -163,6 +163,8 @@ If you do not want to send a test message, you can try creating an empty chat fi
 
 You usually do not need to query it manually. The tool reads `state_5.sqlite` directly and can fill Target Provider from the latest user chat.
 
+If `%USERPROFILE%\.codex\config.toml` still contains an old provider such as `cpa`, do not treat it as the current provider by itself. During restore, the tool syncs `model_provider` in `config.toml` to the Target Provider you confirmed.
+
 Advanced users can still inspect the `threads` table in `state_5.sqlite` with any SQLite viewer. Look at the latest `thread_source='user'` rows. The `model_provider` from a newly visible working chat is the best Target Provider candidate.
 
 ### What is Target Provider Injection?
@@ -235,6 +237,7 @@ During restore, the tool may modify:
 %USERPROFILE%\.codex\archived_sessions\...\rollout-*.jsonl
 %USERPROFILE%\.codex\session_index.jsonl
 %USERPROFILE%\.codex\.codex-global-state.json
+%USERPROFILE%\.codex\config.toml
 ```
 
 Before writing, it creates a backup folder:
@@ -254,9 +257,22 @@ The backup includes:
 - archived sessions
 - manifest.json
 
+## Backup Rollback
+
+If the result is not what you expected, you can restore one of the automatic backups from the `Backup Rollback` area in the left panel:
+
+1. Click `Refresh Backups`.
+2. Select a backup in `Backup Snapshot`.
+3. Click `Restore This Backup`.
+4. Confirm the prompt.
+
+Before rolling back, the tool automatically creates another backup of the current state. If you pick the wrong backup, you still have a new safety backup to roll back to.
+
+It is recommended to close or restart Codex desktop before rolling back, so state files are less likely to be locked.
+
 ## Backup Cleanup
 
-Backup folders are only used when you need to roll back to the pre-restore state. Codex does not need these backups for normal operation. After confirming that your sidebar chat history has been restored correctly, you can manually remove old backups.
+Backup folders are only used when you need to roll back to the pre-restore state. Codex does not need these backups for normal operation. After confirming that your sidebar chat history has been restored correctly and you no longer need rollback, you can manually remove old backups.
 
 It is recommended to keep at least the latest 1-2 backups. For manual cleanup, open this folder in File Explorer:
 

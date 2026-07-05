@@ -7,6 +7,8 @@ const { exec } = require('child_process');
 const ROOT = __dirname;
 const DIST = path.join(ROOT, 'dist');
 const THREAD_ID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+const STATE_FILE_NAMES = ['state_5.sqlite', 'state_5.sqlite-wal', 'state_5.sqlite-shm', 'session_index.jsonl', '.codex-global-state.json', 'config.toml', 'config.toml.bak'];
+const RESTORABLE_DIR_NAMES = ['sessions', 'archived_sessions'];
 
 function stripExtendedPrefix(value) {
   return value && value.startsWith('\\\\?\\') ? value.slice(4) : value;
@@ -98,6 +100,51 @@ function firstJsonLine(file) {
   return first ? JSON.parse(first) : null;
 }
 
+function readTextIfExists(file) {
+  if (!fs.existsSync(file)) return '';
+  return fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '');
+}
+
+function readConfigModelProvider(root) {
+  const text = readTextIfExists(path.join(root, 'config.toml'));
+  if (!text.trim()) return '';
+  for (const rawLine of text.split(/\r?\n/)) {
+    if (/^\s*#/.test(rawLine)) continue;
+    const line = rawLine.replace(/#.*/, '').trim();
+    const match = line.match(/^model_provider\s*=\s*(['"])(.*?)\1\s*$/);
+    if (match && match[2].trim()) return match[2].trim();
+  }
+  return '';
+}
+
+function updateConfigModelProvider(root, targetProvider) {
+  const provider = String(targetProvider || '').trim();
+  if (!provider) throw new Error('Target Provider is required to update config.toml.');
+  const configPath = path.join(root, 'config.toml');
+  const previous = readConfigModelProvider(root);
+  const text = readTextIfExists(configPath);
+  const eol = text.includes('\r\n') ? '\r\n' : '\n';
+  const nextLine = `model_provider = ${JSON.stringify(provider)}`;
+  let output = '';
+  if (!text) {
+    output = `${nextLine}${eol}`;
+  } else {
+    const lines = text.split(/\r?\n/);
+    let replaced = false;
+    for (let i = 0; i < lines.length; i += 1) {
+      if (/^\s*#/.test(lines[i])) continue;
+      if (/^\s*model_provider\s*=/.test(lines[i])) {
+        lines[i] = nextLine;
+        replaced = true;
+        break;
+      }
+    }
+    output = replaced ? lines.join(eol) : `${text}${/\r?\n$/.test(text) ? '' : eol}${nextLine}${eol}`;
+  }
+  if (output !== text) fs.writeFileSync(configPath, output, 'utf8');
+  return { path: configPath, previous, current: provider, changed: output !== text };
+}
+
 function resolveThreadId(meta, file) {
   let id = meta?.payload?.id ? String(meta.payload.id) : '';
   if (!id) {
@@ -134,16 +181,16 @@ function copyFileSafe(src, dest, skipped) {
   }
 }
 
-function backupCodexState(root, targetProvider, oldProviders, includeSubagents) {
+function createCodexStateBackup(root, { targetProvider = '', oldProviders = [], includeSubagents = false, reason = 'pre-chat-history-restore' } = {}) {
   const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+$/, '').replace('T', '-');
-  const backup = path.join(root, `backup-${stamp}-pre-chat-history-restore`);
+  const backup = path.join(root, `backup-${stamp}-${reason}`);
   const skipped = [];
   fs.mkdirSync(path.join(backup, 'files'), { recursive: true });
-  for (const name of ['state_5.sqlite', 'state_5.sqlite-wal', 'state_5.sqlite-shm', 'session_index.jsonl', '.codex-global-state.json', 'config.toml', 'config.toml.bak']) {
+  for (const name of STATE_FILE_NAMES) {
     const src = path.join(root, name);
     if (fs.existsSync(src)) copyFileSafe(src, path.join(backup, name), skipped);
   }
-  for (const dirName of ['sessions', 'archived_sessions']) {
+  for (const dirName of RESTORABLE_DIR_NAMES) {
     const srcDir = path.join(root, dirName);
     if (!fs.existsSync(srcDir)) continue;
     for (const src of walkFiles(srcDir)) {
@@ -152,7 +199,7 @@ function backupCodexState(root, targetProvider, oldProviders, includeSubagents) 
   }
   fs.writeFileSync(path.join(backup, 'manifest.json'), JSON.stringify({
     createdAt: new Date().toISOString(),
-    reason: 'pre-chat-history-restore',
+    reason,
     root,
     targetProvider,
     oldProviders,
@@ -160,6 +207,103 @@ function backupCodexState(root, targetProvider, oldProviders, includeSubagents) 
     skipped,
   }, null, 2), 'utf8');
   return { backup, skipped };
+}
+
+function backupCodexState(root, targetProvider, oldProviders, includeSubagents) {
+  return createCodexStateBackup(root, { targetProvider, oldProviders, includeSubagents });
+}
+
+function isInside(parent, child) {
+  const relative = path.relative(path.resolve(parent), path.resolve(child));
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function readBackupManifest(backupPath) {
+  const manifestPath = path.join(backupPath, 'manifest.json');
+  if (!fs.existsSync(manifestPath)) return {};
+  const text = fs.readFileSync(manifestPath, 'utf8').replace(/^\uFEFF/, '');
+  return text.trim() ? JSON.parse(text) : {};
+}
+
+function listBackups({ root }) {
+  if (!root || !fs.existsSync(root)) throw new Error(`Missing Codex root: ${root || '(empty)'}`);
+  const backups = fs.readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && /^backup-\d{8}-\d{6}-.+/.test(entry.name))
+    .map((entry) => {
+      const backupPath = path.join(root, entry.name);
+      let manifest = {};
+      try { manifest = readBackupManifest(backupPath); } catch {}
+      const stat = fs.statSync(backupPath);
+      return {
+        name: entry.name,
+        path: backupPath,
+        createdAt: manifest.createdAt || stat.mtime.toISOString(),
+        reason: manifest.reason || '',
+        targetProvider: manifest.targetProvider || '',
+        includeSubagents: Boolean(manifest.includeSubagents),
+      };
+    })
+    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  return { root, backups };
+}
+
+function resolveBackup(root, backupPath) {
+  if (!backupPath || !String(backupPath).trim()) throw new Error('Backup path is required.');
+  const rootPath = path.resolve(root);
+  const resolved = path.resolve(path.isAbsolute(backupPath) ? backupPath : path.join(rootPath, backupPath));
+  if (!isInside(rootPath, resolved)) throw new Error('Backup path must be inside the selected Codex root.');
+  if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) throw new Error(`Backup directory not found: ${resolved}`);
+  const manifest = readBackupManifest(resolved);
+  if (!manifest.reason && !path.basename(resolved).startsWith('backup-')) throw new Error('Selected folder does not look like a Codex recovery backup.');
+  return { path: resolved, manifest };
+}
+
+function copyRestoredFile(src, dest, restored, skipped) {
+  try {
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.copyFileSync(src, dest);
+    restored.push(dest);
+  } catch (error) {
+    skipped.push({ path: dest, reason: error.message });
+  }
+}
+
+function copyRestoredTree(srcDir, destDir, restored, skipped) {
+  if (!fs.existsSync(srcDir)) return;
+  for (const src of walkFiles(srcDir)) {
+    copyRestoredFile(src, path.join(destDir, path.relative(srcDir, src)), restored, skipped);
+  }
+}
+
+function restoreFromBackup({ root, backupPath }) {
+  if (!root || !fs.existsSync(root)) throw new Error(`Missing Codex root: ${root || '(empty)'}`);
+  const backup = resolveBackup(root, backupPath);
+  const safety = createCodexStateBackup(root, { reason: 'pre-backup-restore', includeSubagents: true });
+  const restored = [];
+  const skipped = [];
+  for (const name of STATE_FILE_NAMES) {
+    const src = path.join(backup.path, name);
+    const dest = path.join(root, name);
+    if (fs.existsSync(src)) {
+      copyRestoredFile(src, dest, restored, skipped);
+    } else if ((name === 'state_5.sqlite-wal' || name === 'state_5.sqlite-shm') && fs.existsSync(dest)) {
+      try {
+        fs.rmSync(dest, { force: true });
+        restored.push(dest);
+      } catch (error) {
+        skipped.push({ path: dest, reason: error.message });
+      }
+    }
+  }
+  for (const dirName of RESTORABLE_DIR_NAMES) {
+    copyRestoredTree(path.join(backup.path, 'files', dirName), path.join(root, dirName), restored, skipped);
+  }
+  return {
+    backup: backup.path,
+    safetyBackup: safety.backup,
+    restored: restored.length,
+    skipped,
+  };
 }
 
 function updateJsonlFiles(root, candidateRows, targetProvider) {
@@ -310,7 +454,7 @@ order by model_provider, archived, thread_source;
 `);
     const providers = [...new Set(providerRows.map((row) => String(row.model_provider || '')).filter(Boolean))];
     const latestUser = latestRows[0] || null;
-    return { root, sqliteEngine: 'better-sqlite3', authMode, hasApiKey, latestUser, providerRows, providers, suggestedTarget: authMode === 'chatgpt' && !hasApiKey ? 'openai' : String(latestUser?.model_provider || '') };
+    return { root, sqliteEngine: 'better-sqlite3', authMode, hasApiKey, latestUser, providerRows, providers, configModelProvider: readConfigModelProvider(root), suggestedTarget: authMode === 'chatgpt' ? 'openai' : String(latestUser?.model_provider || '') };
   });
 }
 
@@ -343,9 +487,10 @@ function applyRestore({ root, targetProvider, oldProviders, includeSubagents }) 
     }
     const indexLines = rebuildSessionIndex(db, root);
     const workspaceHintsAdded = updateWorkspaceHints(db, root);
+    const config = updateConfigModelProvider(root, targetProvider);
     const verify = verifyRestore(db, root);
     const passed = verify.INDEX_BAD === 0 && verify.null_thread_source === 0 && verify.USER_THREADS_MISSING_HINT === 0 && verify.JSONL_USER_MISMATCH === 0 && verify.JSONL_BAD === 0;
-    return { backup: backup.backup, backupSkipped: backup.skipped, jsonlChanged: jsonl.changed.length, jsonlSkipped: jsonl.skipped, indexLines, workspaceHintsAdded, verify, passed };
+    return { backup: backup.backup, backupSkipped: backup.skipped, config, jsonlChanged: jsonl.changed.length, jsonlSkipped: jsonl.skipped, indexLines, workspaceHintsAdded, verify, passed };
   });
 }
 
@@ -373,9 +518,11 @@ async function handleApi(req, res) {
   try {
     const body = req.method === 'POST' ? await readBody(req) : {};
     if (req.url === '/api/defaults') return sendJson(res, 200, { ok: true, data: getDefaults() });
+    if (req.url === '/api/backups') return sendJson(res, 200, { ok: true, data: listBackups(body) });
     if (req.url === '/api/scan') return sendJson(res, 200, { ok: true, data: scanState(body) });
     if (req.url === '/api/plan') return sendJson(res, 200, { ok: true, data: buildPlan(body) });
     if (req.url === '/api/apply') return sendJson(res, 200, { ok: true, data: applyRestore(body) });
+    if (req.url === '/api/restore-backup') return sendJson(res, 200, { ok: true, data: restoreFromBackup(body) });
     return sendJson(res, 404, { ok: false, error: { message: 'Not found' } });
   } catch (error) {
     return sendJson(res, 200, { ok: false, error: normalizeError(error) });

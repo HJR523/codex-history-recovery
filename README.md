@@ -162,6 +162,8 @@ Target Provider 是你希望旧聊天迁移到的目标 provider。
 
 通常不需要手动查询。工具会直接读取 `state_5.sqlite`，并用最新的用户主聊天填充 Target Provider。
 
+如果 `%USERPROFILE%\.codex\config.toml` 里还保留旧 provider，例如 `cpa`，不要直接把它当成当前 provider。恢复执行时，工具会把 `config.toml` 里的 `model_provider` 同步为你确认的 Target Provider。
+
 高级用户也可以用任意 SQLite 查看器检查 `state_5.sqlite` 里的 `threads` 表。看最新几条 `thread_source='user'` 的聊天，正常显示的新聊天的 `model_provider` 就是候选 Target Provider。
 
 ### Target Provider Injection 是什么
@@ -234,6 +236,7 @@ thread_source='user'
 %USERPROFILE%\.codex\archived_sessions\...\rollout-*.jsonl
 %USERPROFILE%\.codex\session_index.jsonl
 %USERPROFILE%\.codex\.codex-global-state.json
+%USERPROFILE%\.codex\config.toml
 ```
 
 执行前会自动备份：
@@ -253,9 +256,22 @@ thread_source='user'
 - archived sessions
 - manifest.json
 
+## 备份回滚
+
+如果恢复结果不符合预期，可以在界面左侧的 `备份回滚` 区域恢复到某个自动备份：
+
+1. 点击 `刷新备份`。
+2. 在 `Backup Snapshot` 中选择要恢复的备份。
+3. 点击 `恢复此备份`。
+4. 根据提示确认操作。
+
+执行回滚前，工具会再自动备份一次当前状态。也就是说，即使选错了备份，仍然会留下一个新的安全备份用于再次回滚。
+
+建议在执行回滚前关闭或重启 Codex 桌面端，避免状态文件被占用。
+
 ## 备份清理
 
-备份文件夹只用于在需要时回滚到恢复前状态，Codex 正常运行不依赖这些备份。确认侧边栏聊天记录已经恢复正常后，可以手动清理旧备份。
+备份文件夹只用于在需要时回滚到恢复前状态，Codex 正常运行不依赖这些备份。确认侧边栏聊天记录已经恢复正常、且不再需要回滚后，可以手动清理旧备份。
 
 建议至少保留最新 1-2 个备份。手动清理时，可以在资源管理器中打开：
 
