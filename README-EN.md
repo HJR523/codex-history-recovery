@@ -4,7 +4,7 @@ A local recovery tool for restoring missing chat threads in the Codex desktop si
 
 ## Interface Screenshot
 
-![Codex History Recovery interface](docs/images/codex-recovery-console.png)
+![Codex History Recovery interface](docs/images/codex-recovery-console-v2.png)
 
 ## Use Case
 
