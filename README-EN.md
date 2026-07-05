@@ -161,6 +161,8 @@ Creating an empty chat may also work, but it is less reliable than sending a mes
 
 If you do not want to send a test message, you can try creating an empty chat first, confirm that it appears in the Codex sidebar, then click the scan button and the latest-chat button. If the button does not fill the expected value, send a short message in the new chat and scan again.
 
+If you cannot create or send a chat right now but you know you are signed in with a GPT/ChatGPT account, the Target Provider is usually `openai`. If you use a custom provider, API key, or local provider, do not blindly use `openai`; use the provider that is actually active for your setup.
+
 You usually do not need to query it manually. The tool reads `state_5.sqlite` directly and can fill Target Provider from the latest user chat.
 
 If `%USERPROFILE%\.codex\config.toml` still contains an old provider such as `cpa`, do not treat it as the current provider by itself. During restore, the tool syncs `model_provider` in `config.toml` to the Target Provider you confirmed.
@@ -370,6 +372,8 @@ Check:
 ### Not sure which Target Provider to use
 
 Create a new Codex chat that appears in the sidebar, then return to this tool, scan the state, and click the latest-chat button next to `Target Provider`.
+
+If you cannot create or send a chat but you know you are signed in with a GPT/ChatGPT account, you can try `openai` as the Target Provider first, then click `Check Plan` to see whether old chats are matched.
 
 ## Development
 

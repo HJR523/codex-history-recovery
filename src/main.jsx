@@ -530,6 +530,10 @@ function App() {
                     <datalist id="provider-options">{providerOptions.map((p) => <option value={p} key={p} />)}</datalist>
                     <Button tone="soft" onClick={useLatestProvider} disabled={!scan} className="shrink-0 px-3">使用最新聊天</Button>
                   </div>
+                  <div className="mt-2 rounded-xl border border-blue-100 bg-blue-50/70 px-3 py-2 text-[12px] leading-5 text-slate-600">
+                    <span className="font-semibold text-blue-700">提示：</span>
+                    如果你使用 GPT/ChatGPT 账号登录，Target Provider 通常填写 <code className="rounded bg-white/80 px-1.5 py-0.5 font-mono text-blue-700">openai</code>。如果暂时无法新建或发送聊天，可以先填 <code className="rounded bg-white/80 px-1.5 py-0.5 font-mono text-blue-700">openai</code> 再检查方案；自定义 provider、API Key 或本地 provider 用户请以实际可用 provider 为准。
+                  </div>
                 </Field>
 
                 <Field label="Include Subagents (包含子代理)">

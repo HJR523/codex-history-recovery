@@ -160,6 +160,8 @@ Target Provider 是你希望旧聊天迁移到的目标 provider。
 
 如果你不想发送测试消息，也可以先新建空对话，确认它已经出现在 Codex 侧边栏，然后点击 `深度扫描` 和“使用最新聊天”。如果按钮没有填入预期值，再回到新对话发送一条简短消息后重新扫描。
 
+如果暂时无法新建或发送聊天，但你确定当前是 GPT/ChatGPT 账号登录，Target Provider 通常填写 `openai`。如果你使用自定义 provider、API Key 或本地 provider，不要直接套用 `openai`，应以实际可用的 provider 为准。
+
 通常不需要手动查询。工具会直接读取 `state_5.sqlite`，并用最新的用户主聊天填充 Target Provider。
 
 如果 `%USERPROFILE%\.codex\config.toml` 里还保留旧 provider，例如 `cpa`，不要直接把它当成当前 provider。恢复执行时，工具会把 `config.toml` 里的 `model_provider` 同步为你确认的 Target Provider。
@@ -369,6 +371,8 @@ Codex History Recovery is running at http://127.0.0.1:47321
 ### 不确定 Target Provider 怎么选
 
 建议先新建一个 Codex 新聊天，确认它能在侧边栏显示，再回到工具点击 `深度扫描`，然后点击 `Target Provider` 旁边的“使用最新聊天”按钮。
+
+如果无法新建或发送聊天，但你确定当前是 GPT/ChatGPT 账号登录，可以先把 Target Provider 填为 `openai`，再点击 `检查方案` 查看是否能匹配到旧聊天。
 
 ## 开发
 
