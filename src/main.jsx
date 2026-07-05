@@ -532,7 +532,7 @@ function App() {
                   </div>
                   <div className="mt-2 rounded-xl border border-blue-100 bg-blue-50/70 px-3 py-2 text-[12px] leading-5 text-slate-600">
                     <span className="font-semibold text-blue-700">提示：</span>
-                    如果你使用 GPT/ChatGPT 账号登录，Target Provider 通常填写 <code className="rounded bg-white/80 px-1.5 py-0.5 font-mono text-blue-700">openai</code>。如果暂时无法新建或发送聊天，可以先填 <code className="rounded bg-white/80 px-1.5 py-0.5 font-mono text-blue-700">openai</code> 再检查方案；自定义 provider、API Key 或本地 provider 用户请以实际可用 provider 为准。
+                    如果你使用 GPT/ChatGPT 账号登录，Target Provider 通常是 <code className="rounded bg-white/80 px-1.5 py-0.5 font-mono text-blue-700">openai</code>。如果暂时无法新建或发送聊天，可以先把 <code className="rounded bg-white/80 px-1.5 py-0.5 font-mono text-blue-700">openai</code> 作为候选值，只点击“检查方案”验证匹配结果；确认无误后再开始恢复。开始恢复时，工具会把 config.toml 同步为该 Target Provider。
                   </div>
                 </Field>
 
