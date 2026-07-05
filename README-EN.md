@@ -104,7 +104,7 @@ If the port is already in use, the tool automatically tries the next port.
 5. Click the scan button.
 6. Review the provider distribution.
 7. Select or type the `Target Provider`.
-8. You may click the latest-chat button next to `Target Provider` to fill in the provider from the latest user chat.
+8. You may first create a new Codex chat that appears normally, then return to this tool and click the latest-chat button next to `Target Provider` to fill in that new chat's provider.
 9. Choose whether to migrate subagents.
 10. Select the old providers that should be replaced.
 11. Click `Check plan`.
@@ -152,9 +152,14 @@ The Target Provider is the provider you want restored old chats to use.
 The safest way to determine it:
 
 1. Create a new Codex chat that appears correctly in the sidebar.
-2. Return to this tool and scan the Codex state.
-3. Click the latest-chat button next to `Target Provider`.
-4. The tool fills `Target Provider` with the `model_provider` from the latest user chat.
+2. Send a very short test message so the new chat is definitely written to local state.
+3. Return to this tool and scan the Codex state.
+4. Click the latest-chat button next to `Target Provider`.
+5. The tool fills `Target Provider` with the `model_provider` from the latest user chat.
+
+Creating an empty chat may also work, but it is less reliable than sending a message. The latest-chat button reads the latest user chat from `state_5.sqlite`; if Codex has not written the empty chat to the state database yet, or has not written its `model_provider`, the tool may skip that empty chat and read the previous user chat that already has a provider.
+
+If you do not want to send a test message, you can try creating an empty chat first, confirm that it appears in the Codex sidebar, then click the scan button and the latest-chat button. If the button does not fill the expected value, send a short message in the new chat and scan again.
 
 You usually do not need to query it manually. The tool reads `state_5.sqlite` directly and can fill Target Provider from the latest user chat.
 
