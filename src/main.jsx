@@ -27,6 +27,7 @@ const browserApi = {
   plan: (payload) => postJson('/api/plan', payload),
   apply: (payload) => postJson('/api/apply', payload),
   restoreBackup: (payload) => postJson('/api/restore-backup', payload),
+  deleteBackup: (payload) => postJson('/api/delete-backup', payload),
 };
 
 const api = window.historyRecovery ?? browserApi;
@@ -462,6 +463,23 @@ function App() {
     refreshBackups(root, false);
   }
 
+  async function handleDeleteBackup() {
+    if (!selectedBackup) {
+      warn('请先选择一个备份');
+      return;
+    }
+    const label = selectedBackupInfo?.name || selectedBackup;
+    const yes = window.confirm(`确认删除这个备份？\n\n${label}\n\n删除后，这个备份将无法再用于回滚。此操作只会删除选中的备份文件夹，不会删除 .codex 主目录或聊天记录。`);
+    if (!yes) return;
+    setStatus({ tone: 'info', text: '正在删除备份...' });
+    const data = await call('delete-backup', () => api.deleteBackup({ root, backupPath: selectedBackup }));
+    if (!data) return;
+    setSelectedBackup('');
+    setStatus({ tone: 'good', text: '备份已删除' });
+    log(`Backup deleted: ${data.deleted}`);
+    refreshBackups(root, false);
+  }
+
   const statusColors = {
     info: 'text-blue-700 bg-blue-50 ring-blue-200/50',
     good: 'text-emerald-700 bg-emerald-50 ring-emerald-200/50',
@@ -565,7 +583,7 @@ function App() {
               <div className="mb-5 flex items-center justify-between gap-3">
                 <div>
                   <h2 className="text-[16px] font-bold text-slate-900">备份回滚</h2>
-                  <p className="mt-1 text-[12px] font-medium text-slate-500">从恢复前自动备份中还原 Codex 状态</p>
+                  <p className="mt-1 text-[12px] font-medium text-slate-500">只显示本工具生成的备份，可还原或删除</p>
                 </div>
                 <Button tone="soft" onClick={() => refreshBackups(root)} busy={busy === 'backups'} className="h-9 px-3 text-[12px]">刷新备份</Button>
               </div>
@@ -581,7 +599,7 @@ function App() {
                       <option key={item.path} value={item.path}>
                         {item.name}
                       </option>
-                    )) : <option value="">请先刷新备份列表</option>}
+                    )) : <option value="">暂无本工具备份</option>}
                   </select>
                 </Field>
 
@@ -602,9 +620,14 @@ function App() {
                   )}
                 </div>
 
-                <Button tone="danger" disabled={!selectedBackup} busy={busy === 'restore-backup'} onClick={handleRestoreBackup} className="w-full">
-                  恢复此备份
-                </Button>
+                <div className="grid grid-cols-2 gap-3">
+                  <Button tone="danger" disabled={!selectedBackup} busy={busy === 'delete-backup'} onClick={handleDeleteBackup}>
+                    删除备份
+                  </Button>
+                  <Button tone="primary" disabled={!selectedBackup} busy={busy === 'restore-backup'} onClick={handleRestoreBackup}>
+                    恢复此备份
+                  </Button>
+                </div>
               </div>
             </div>
           </div>

@@ -7,6 +7,8 @@ const { exec } = require('child_process');
 const ROOT = __dirname;
 const DIST = path.join(ROOT, 'dist');
 const THREAD_ID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+const BACKUP_DIR_RE = /^backup-\d{8}-\d{6}-.+/;
+const PROJECT_BACKUP_REASONS = new Set(['pre-chat-history-restore', 'pre-backup-restore']);
 const STATE_FILE_NAMES = ['state_5.sqlite', 'state_5.sqlite-wal', 'state_5.sqlite-shm', 'session_index.jsonl', '.codex-global-state.json', 'config.toml', 'config.toml.bak'];
 const RESTORABLE_DIR_NAMES = ['sessions', 'archived_sessions'];
 
@@ -225,14 +227,19 @@ function readBackupManifest(backupPath) {
   return text.trim() ? JSON.parse(text) : {};
 }
 
+function isProjectBackupManifest(manifest) {
+  return PROJECT_BACKUP_REASONS.has(String(manifest.reason || ''));
+}
+
 function listBackups({ root }) {
   if (!root || !fs.existsSync(root)) throw new Error(`Missing Codex root: ${root || '(empty)'}`);
   const backups = fs.readdirSync(root, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && /^backup-\d{8}-\d{6}-.+/.test(entry.name))
+    .filter((entry) => entry.isDirectory() && BACKUP_DIR_RE.test(entry.name))
     .map((entry) => {
       const backupPath = path.join(root, entry.name);
       let manifest = {};
       try { manifest = readBackupManifest(backupPath); } catch {}
+      if (!isProjectBackupManifest(manifest)) return null;
       const stat = fs.statSync(backupPath);
       return {
         name: entry.name,
@@ -241,8 +248,10 @@ function listBackups({ root }) {
         reason: manifest.reason || '',
         targetProvider: manifest.targetProvider || '',
         includeSubagents: Boolean(manifest.includeSubagents),
+        projectBackup: true,
       };
     })
+    .filter(Boolean)
     .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
   return { root, backups };
 }
@@ -254,7 +263,7 @@ function resolveBackup(root, backupPath) {
   if (!isInside(rootPath, resolved)) throw new Error('Backup path must be inside the selected Codex root.');
   if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) throw new Error(`Backup directory not found: ${resolved}`);
   const manifest = readBackupManifest(resolved);
-  if (!manifest.reason && !path.basename(resolved).startsWith('backup-')) throw new Error('Selected folder does not look like a Codex recovery backup.');
+  if (!BACKUP_DIR_RE.test(path.basename(resolved)) || !isProjectBackupManifest(manifest)) throw new Error('Selected folder was not created by this recovery tool.');
   return { path: resolved, manifest };
 }
 
@@ -304,6 +313,15 @@ function restoreFromBackup({ root, backupPath }) {
     restored: restored.length,
     skipped,
   };
+}
+
+function deleteBackup({ root, backupPath }) {
+  if (!root || !fs.existsSync(root)) throw new Error(`Missing Codex root: ${root || '(empty)'}`);
+  const backup = resolveBackup(root, backupPath);
+  const name = path.basename(backup.path);
+  if (!BACKUP_DIR_RE.test(name)) throw new Error('Refusing to delete a folder that is not a recovery backup.');
+  fs.rmSync(backup.path, { recursive: true, force: false });
+  return { root, deleted: backup.path, name };
 }
 
 function updateJsonlFiles(root, candidateRows, targetProvider) {
@@ -523,6 +541,7 @@ async function handleApi(req, res) {
     if (req.url === '/api/plan') return sendJson(res, 200, { ok: true, data: buildPlan(body) });
     if (req.url === '/api/apply') return sendJson(res, 200, { ok: true, data: applyRestore(body) });
     if (req.url === '/api/restore-backup') return sendJson(res, 200, { ok: true, data: restoreFromBackup(body) });
+    if (req.url === '/api/delete-backup') return sendJson(res, 200, { ok: true, data: deleteBackup(body) });
     return sendJson(res, 404, { ok: false, error: { message: 'Not found' } });
   } catch (error) {
     return sendJson(res, 200, { ok: false, error: normalizeError(error) });

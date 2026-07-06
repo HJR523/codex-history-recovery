@@ -261,7 +261,7 @@ The backup includes:
 
 ## Backup Rollback
 
-If the result is not what you expected, you can restore one of the automatic backups from the `Backup Rollback` area in the left panel:
+If the result is not what you expected, you can restore one of the automatic backups from the `Backup Rollback` area in the left panel. The backup list only shows backups created by this tool; the tool reads `manifest.json` inside each backup directory and only allows restore or deletion after confirming it was created by this project.
 
 1. Click `Refresh Backups`.
 2. Select a backup in `Backup Snapshot`.
@@ -272,9 +272,11 @@ Before rolling back, the tool automatically creates another backup of the curren
 
 It is recommended to close or restart Codex desktop before rolling back, so state files are less likely to be locked.
 
+If you no longer need a backup, select it in the same area and click `Delete Backup`. Deletion only removes the selected project backup folder. It does not delete the `.codex` root folder or chat records.
+
 ## Backup Cleanup
 
-Backup folders are only used when you need to roll back to the pre-restore state. Codex does not need these backups for normal operation. After confirming that your sidebar chat history has been restored correctly and you no longer need rollback, you can manually remove old backups.
+Backup folders are only used when you need to roll back to the pre-restore state. Codex does not need these backups for normal operation. After confirming that your sidebar chat history has been restored correctly and you no longer need rollback, you can delete old backups from the UI or manually remove them.
 
 It is recommended to keep at least the latest 1-2 backups. For manual cleanup, open this folder in File Explorer:
 
