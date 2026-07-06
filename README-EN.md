@@ -272,11 +272,13 @@ Before rolling back, the tool automatically creates another backup of the curren
 
 It is recommended to close or restart Codex desktop before rolling back, so state files are less likely to be locked.
 
-If you no longer need a backup, select it in the same area and click `Delete Backup`. Deletion only removes the selected project backup folder. It does not delete the `.codex` root folder or chat records.
+If you no longer need one specific backup, select it in the same area and click `Delete Current Backup`. This only removes the currently selected project backup folder. It does not delete the `.codex` root folder or chat records.
 
 ## Backup Cleanup
 
 Backup folders are only used when you need to roll back to the pre-restore state. Codex does not need these backups for normal operation. After confirming that your sidebar chat history has been restored correctly and you no longer need rollback, you can delete old backups from the UI or manually remove them.
+
+Use `Delete Expired Backups` to batch-clean old backups. Set how many recent backups to keep, for example keep the latest 2; the tool previews how many expired backups will be deleted and asks for confirmation before deleting only older project backups.
 
 It is recommended to keep at least the latest 1-2 backups. For manual cleanup, open this folder in File Explorer:
 

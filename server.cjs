@@ -324,6 +324,37 @@ function deleteBackup({ root, backupPath }) {
   return { root, deleted: backup.path, name };
 }
 
+function normalizeKeepCount(value) {
+  const keep = Number(value ?? 2);
+  if (!Number.isInteger(keep) || keep < 0) throw new Error('Keep count must be a non-negative integer.');
+  return keep;
+}
+
+function cleanupExpiredBackups({ root, keep, yes = false }) {
+  const keepCount = normalizeKeepCount(keep);
+  const backups = listBackups({ root }).backups;
+  const kept = backups.slice(0, keepCount);
+  const expired = backups.slice(keepCount);
+  const deleted = [];
+  if (yes) {
+    for (const item of expired) {
+      const backup = resolveBackup(root, item.path);
+      fs.rmSync(backup.path, { recursive: true, force: false });
+      deleted.push(backup.path);
+    }
+  }
+  return {
+    root,
+    keep: keepCount,
+    total: backups.length,
+    expiredCount: expired.length,
+    kept,
+    expired: yes ? [] : expired,
+    deleted,
+    dryRun: !yes,
+  };
+}
+
 function updateJsonlFiles(root, candidateRows, targetProvider) {
   const candidateIds = new Set(candidateRows.map((row) => String(row.id)));
   const changed = [];
@@ -542,6 +573,7 @@ async function handleApi(req, res) {
     if (req.url === '/api/apply') return sendJson(res, 200, { ok: true, data: applyRestore(body) });
     if (req.url === '/api/restore-backup') return sendJson(res, 200, { ok: true, data: restoreFromBackup(body) });
     if (req.url === '/api/delete-backup') return sendJson(res, 200, { ok: true, data: deleteBackup(body) });
+    if (req.url === '/api/cleanup-backups') return sendJson(res, 200, { ok: true, data: cleanupExpiredBackups(body) });
     return sendJson(res, 404, { ok: false, error: { message: 'Not found' } });
   } catch (error) {
     return sendJson(res, 200, { ok: false, error: normalizeError(error) });

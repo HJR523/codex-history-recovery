@@ -28,6 +28,7 @@ const browserApi = {
   apply: (payload) => postJson('/api/apply', payload),
   restoreBackup: (payload) => postJson('/api/restore-backup', payload),
   deleteBackup: (payload) => postJson('/api/delete-backup', payload),
+  cleanupBackups: (payload) => postJson('/api/cleanup-backups', payload),
 };
 
 const api = window.historyRecovery ?? browserApi;
@@ -220,6 +221,7 @@ function App() {
   const [defaultsInfo, setDefaultsInfo] = useState(null);
   const [backups, setBackups] = useState([]);
   const [selectedBackup, setSelectedBackup] = useState('');
+  const [backupKeepCount, setBackupKeepCount] = useState(2);
   const [busy, setBusy] = useState('');
   const [status, setStatus] = useState({ tone: 'info', text: '系统就绪，等待配置路径' });
   const [logs, setLogs] = useState([{ time: now(), text: 'System ready. Awaiting parameters...' }]);
@@ -480,6 +482,32 @@ function App() {
     refreshBackups(root, false);
   }
 
+  async function handleCleanupBackups() {
+    const keep = Number(backupKeepCount);
+    if (!Number.isInteger(keep) || keep < 1) {
+      warn('保留数量必须是大于 0 的整数');
+      return;
+    }
+    const preview = await call('cleanup-backups', () => api.cleanupBackups({ root, keep, yes: false }));
+    if (!preview) return;
+    if (!preview.expiredCount) {
+      setStatus({ tone: 'good', text: '没有过期备份需要删除' });
+      log(`No expired backups. Total=${preview.total}, keep=${preview.keep}`);
+      return;
+    }
+    const names = (preview.expired || []).slice(0, 6).map((item) => item.name).join('\n');
+    const more = preview.expiredCount > 6 ? `\n...以及另外 ${preview.expiredCount - 6} 个` : '';
+    const yes = window.confirm(`确认删除过期备份？\n\n将保留最新 ${keep} 个本工具备份，删除更旧的 ${preview.expiredCount} 个。\n\n${names}${more}\n\n此操作不会删除 .codex 主目录或聊天记录。`);
+    if (!yes) return;
+    setStatus({ tone: 'info', text: '正在删除过期备份...' });
+    const data = await call('cleanup-backups', () => api.cleanupBackups({ root, keep, yes: true }));
+    if (!data) return;
+    setSelectedBackup('');
+    setStatus({ tone: 'good', text: '过期备份已删除' });
+    log(`Expired backups deleted: ${data.deleted.length}, kept=${data.keep}`);
+    refreshBackups(root, false);
+  }
+
   const statusColors = {
     info: 'text-blue-700 bg-blue-50 ring-blue-200/50',
     good: 'text-emerald-700 bg-emerald-50 ring-emerald-200/50',
@@ -622,10 +650,34 @@ function App() {
 
                 <div className="grid grid-cols-2 gap-3">
                   <Button tone="danger" disabled={!selectedBackup} busy={busy === 'delete-backup'} onClick={handleDeleteBackup}>
-                    删除备份
+                    删除当前备份
                   </Button>
                   <Button tone="primary" disabled={!selectedBackup} busy={busy === 'restore-backup'} onClick={handleRestoreBackup}>
                     恢复此备份
+                  </Button>
+                </div>
+
+                <div className="rounded-xl border border-amber-100 bg-amber-50/60 px-4 py-3">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-[13px] font-bold text-amber-900">过期备份清理</div>
+                      <p className="mt-1 text-[12px] leading-5 text-amber-800/80">保留最新的本工具备份，删除更旧的备份。</p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <span className="text-[12px] font-semibold text-amber-900">保留</span>
+                      <input
+                        type="number"
+                        min="1"
+                        step="1"
+                        value={backupKeepCount}
+                        onChange={(e) => setBackupKeepCount(e.target.value)}
+                        className="h-9 w-16 rounded-lg border border-amber-200 bg-white px-2 text-center text-[13px] font-semibold text-slate-900 outline-none focus:border-amber-400 focus:ring-[3px] focus:ring-amber-100"
+                      />
+                      <span className="text-[12px] font-semibold text-amber-900">个</span>
+                    </div>
+                  </div>
+                  <Button tone="danger" disabled={!backups.length} busy={busy === 'cleanup-backups'} onClick={handleCleanupBackups} className="w-full">
+                    删除过期备份
                   </Button>
                 </div>
               </div>
