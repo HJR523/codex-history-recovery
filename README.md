@@ -4,7 +4,7 @@
 
 ## 界面截图
 
-![Codex History Recovery 主界面](docs/images/codex-recovery-console-v2.png)
+![Codex History Recovery 主界面](docs/images/codex-recovery-console-v3.png)
 
 ## 使用场景
 
