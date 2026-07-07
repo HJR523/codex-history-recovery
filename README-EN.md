@@ -67,9 +67,7 @@ This tool uses the SQLite capability built into Node.js / Electron. It does not 
 
 ### Option 1: Download the desktop app (recommended)
 
-Download page:
-
-https://github.com/HJR523/codex-history-recovery/releases/latest
+Download page: [Download the latest release](https://github.com/HJR523/codex-history-recovery/releases/latest)
 
 Download one of these files from GitHub Releases:
 
