@@ -67,6 +67,10 @@
 
 ### 方法一：下载桌面版（推荐）
 
+下载地址：
+
+https://github.com/HJR523/codex-history-recovery/releases/latest
+
 在 GitHub Releases 下载其中一个文件：
 
 ```text
