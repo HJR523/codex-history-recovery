@@ -2,12 +2,17 @@
   "name": "codex-history-recovery",
   "version": "2.0.0",
   "description": "Modern desktop UI for restoring Codex sidebar chat history.",
-  "main": "server.cjs",
+  "main": "electron/main.cjs",
   "type": "module",
   "private": true,
+  "author": "HJR523",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/HJR523/codex-history-recovery.git"
+  },
   "engines": {
-    "node": ">=20.19"
+    "node": ">=22.5"
   },
   "keywords": [
     "codex",
@@ -20,11 +25,13 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
-    "start": "node server.cjs",
-    "app": "npm run build && npm run start"
+    "start": "node --no-warnings server.cjs",
+    "app": "npm run build && npm run start",
+    "desktop": "npm run build && electron .",
+    "pack": "npm run build && electron-builder --dir",
+    "dist:win": "npm run build && electron-builder --win nsis portable --x64"
   },
   "dependencies": {
-    "better-sqlite3": "^12.11.1",
     "lucide-react": "^1.23.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
@@ -32,8 +39,54 @@
   "devDependencies": {
     "@vitejs/plugin-react": "^6.0.3",
     "autoprefixer": "^10.5.2",
+    "electron": "^43.0.0",
+    "electron-builder": "^26.15.3",
     "postcss": "^8.5.16",
     "tailwindcss": "^3.4.17",
     "vite": "^8.1.3"
+  },
+  "build": {
+    "appId": "com.hjr523.codex-history-recovery",
+    "productName": "Codex History Recovery",
+    "copyright": "Copyright © 2026 HJR523",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "server.cjs",
+      "package.json",
+      "node_modules/**/*"
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Codex History Recovery",
+      "artifactName": "Codex-History-Recovery-Setup-${version}-${arch}.${ext}"
+    },
+    "portable": {
+      "artifactName": "Codex-History-Recovery-Portable-${version}-${arch}.${ext}"
+    }
   }
 }

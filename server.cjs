@@ -1,7 +1,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const Database = require('better-sqlite3');
+const { DatabaseSync } = require('node:sqlite');
 const { exec } = require('child_process');
 
 const ROOT = __dirname;
@@ -24,8 +24,8 @@ function validateRoot(root) {
 }
 
 function openDatabase(dbPath, readonly) {
-  const db = new Database(dbPath, { readonly, fileMustExist: true, timeout: 10000 });
-  db.pragma('busy_timeout = 10000');
+  const db = new DatabaseSync(dbPath, { readOnly: readonly });
+  db.exec('PRAGMA busy_timeout = 10000;');
   return db;
 }
 
@@ -56,7 +56,7 @@ function runImmediateTransaction(db, fn) {
 }
 
 function checkpoint(db) {
-  db.pragma('wal_checkpoint(PASSIVE)');
+  db.exec('PRAGMA wal_checkpoint(PASSIVE);');
 }
 
 function sqlQuote(value) {
@@ -485,7 +485,7 @@ function verifyRestore(db, root) {
 
 function getDefaults() {
   const root = path.join(process.env.USERPROFILE || '', '.codex');
-  return { root, rootExists: fs.existsSync(path.join(root, 'state_5.sqlite')), sqliteEngine: 'better-sqlite3' };
+  return { root, rootExists: fs.existsSync(path.join(root, 'state_5.sqlite')), sqliteEngine: 'node:sqlite' };
 }
 
 function scanState({ root }) {
@@ -519,7 +519,7 @@ order by model_provider, archived, thread_source;
     const configModelProvider = readConfigModelProvider(root);
     return {
       root,
-      sqliteEngine: 'better-sqlite3',
+      sqliteEngine: 'node:sqlite',
       authMode,
       hasApiKey,
       latestUser,
@@ -626,26 +626,65 @@ function serveStatic(req, res) {
   res.end(fs.readFileSync(file));
 }
 
-function createServer(port) {
-  const server = http.createServer((req, res) => {
+function ensureBuiltFrontend() {
+  if (!fs.existsSync(path.join(DIST, 'index.html'))) {
+    throw new Error('Missing dist/index.html. Run: npm run build');
+  }
+}
+
+function createHttpServer() {
+  return http.createServer((req, res) => {
     if ((req.url || '').startsWith('/api/')) return handleApi(req, res);
     return serveStatic(req, res);
   });
-  server.on('error', (error) => {
-    if (error.code === 'EADDRINUSE') createServer(port + 1);
-    else throw error;
-  });
-  server.listen(port, '127.0.0.1', () => {
-    const url = `http://127.0.0.1:${port}`;
-    console.log(`Codex History Recovery is running at ${url}`);
-    console.log('Keep this window open while using the tool.');
-    if (process.env.NO_OPEN !== '1') exec(`cmd /c start "" "${url}"`);
+}
+
+function createServer(port = 47321, options = {}) {
+  const host = options.host || '127.0.0.1';
+  const startPort = Number(port) || 47321;
+  const maxPort = startPort + 100;
+  const shouldOpenBrowser = options.openBrowser !== false && process.env.NO_OPEN !== '1';
+  const shouldLog = options.log !== false;
+  const mode = options.mode || 'browser';
+
+  ensureBuiltFrontend();
+
+  return new Promise((resolve, reject) => {
+    const listen = (nextPort) => {
+      const server = createHttpServer();
+      server.once('error', (error) => {
+        if (error.code === 'EADDRINUSE' && nextPort < maxPort) {
+          listen(nextPort + 1);
+          return;
+        }
+        reject(error);
+      });
+      server.listen(nextPort, host, () => {
+        const url = `http://${host}:${nextPort}`;
+        if (shouldLog) {
+          console.log(`Codex History Recovery is running at ${url}`);
+          if (mode === 'browser') console.log('Keep this window open while using the browser launcher.');
+        }
+        if (shouldOpenBrowser) exec(`cmd /c start "" "${url}"`);
+        resolve({ server, port: nextPort, url });
+      });
+    };
+
+    listen(startPort);
   });
 }
 
-if (!fs.existsSync(path.join(DIST, 'index.html'))) {
-  console.error('Missing dist/index.html. Run: npm run build');
-  process.exit(1);
+async function startStandalone() {
+  try {
+    await createServer(47321);
+  } catch (error) {
+    console.error(error?.message || error);
+    process.exit(1);
+  }
 }
 
-createServer(47321);
+if (require.main === module) startStandalone();
+
+module.exports = {
+  createServer,
+};

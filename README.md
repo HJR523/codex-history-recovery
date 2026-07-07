@@ -41,19 +41,46 @@
 - 恢复前检查方案
 - 执行前自动备份
 - 执行后自动验证
+- 可打包为 Windows 安装包和便携版桌面应用
 - 保留 Windows 双击启动脚本
 
 ## 环境要求
 
+### 下载桌面版
+
+- Windows 10/11
+- 不需要安装 Node.js
+- 不需要安装 npm
+- 不需要安装 sqlite3
+
+如果你下载的是 GitHub Releases 里的安装包或便携版，直接运行即可。
+
+### 从源码运行
+
 - Windows
-- Node.js 20.19 或更高版本
+- Node.js 22.5 或更高版本
 - npm
 
-本工具会随项目依赖安装所需的数据库访问模块，用户只需要准备 Node.js 和 npm。
+本工具使用 Node.js / Electron 内置 SQLite 能力，不需要额外安装 sqlite3 或数据库工具。从源码运行时，用户只需要准备 Node.js 和 npm。
 
 ## 快速使用
 
-### 方法一：双击启动
+### 方法一：下载桌面版（推荐）
+
+在 GitHub Releases 下载其中一个文件：
+
+```text
+Codex-History-Recovery-Setup-版本号-x64.exe
+Codex-History-Recovery-Portable-版本号-x64.exe
+```
+
+`Setup` 是安装版，双击后按提示安装，之后可以从桌面图标或开始菜单打开。
+
+`Portable` 是便携版，不需要安装，双击即可打开。
+
+桌面版打开后会直接显示恢复界面，不需要手动安装 Node.js，不需要打开命令行，也不需要访问本地网址。
+
+### 方法二：双击源码启动
 
 双击：
 
@@ -66,14 +93,14 @@ restore-codex-sidebar-chat.cmd
 ```text
 npm install
 npm run build
-node server.cjs
+node --no-warnings server.cjs
 ```
 
 随后浏览器会自动打开本地界面。
 
 使用期间不要关闭弹出的命令行窗口，因为它就是本地恢复服务。
 
-### 方法二：命令行启动
+### 方法三：命令行启动
 
 ```powershell
 cd D:\Codex\history-recovery
@@ -360,17 +387,15 @@ cd D:\Codex\history-recovery
 restore-codex-sidebar-chat.cmd
 ```
 
-如果提示找不到 Node.js，请安装 Node.js 20.19 或更高版本，并把 Node.js 加入 PATH。
+如果提示找不到 Node.js，请安装 Node.js 22.5 或更高版本，并把 Node.js 加入 PATH。
 
 ### npm install 失败
 
-本工具会随项目依赖安装所需的数据库访问模块。如果安装依赖时报错，优先检查：
+如果安装依赖时报错，优先检查：
 
-- Node.js 是否为 20.19 或更高版本
+- Node.js 是否为 22.5 或更高版本
 - 网络是否能访问 npm
 - 是否在公司代理或安全软件拦截环境中
-
-如果错误来自数据库访问模块的原生依赖安装，建议换用 Node.js 22 LTS 后重新运行 `npm install`。
 
 ### 浏览器没有自动打开
 
@@ -431,13 +456,44 @@ npm start
 npm run app
 ```
 
+启动桌面预览：
+
+```powershell
+npm run desktop
+```
+
+生成 Windows 安装包和便携版：
+
+```powershell
+npm run dist:win
+```
+
+打包产物会生成到 `release` 目录。该目录只用于本机发布构建，不需要提交到仓库。
+
+也可以直接推送版本标签，让 GitHub Actions 在 Windows 环境中自动打包并发布到 GitHub Releases：
+
+```powershell
+git tag v2.0.0
+git push origin v2.0.0
+```
+
 ## 项目结构
 
 ```text
 .
+├── .github/
+│   └── workflows/
+├── build/
+│   ├── icon.ico
+│   └── icon.png
+├── electron/
+│   ├── main.cjs
+│   └── preload.cjs
 ├── src/
 │   ├── main.jsx
 │   └── styles.css
+├── docs/
+│   └── images/
 ├── index.html
 ├── server.cjs
 ├── package.json
@@ -446,7 +502,8 @@ npm run app
 ├── postcss.config.js
 ├── vite.config.js
 ├── restore-codex-sidebar-chat.cmd
-└── README.md
+├── README.md
+└── README-EN.md
 ```
 
 ## License

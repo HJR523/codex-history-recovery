@@ -41,19 +41,46 @@ By default, the tool migrates only user-owned main chat threads. It does not mig
 - Restore plan check before writing
 - Automatic pre-restore backup
 - Automatic post-restore verification
+- Can be packaged as a Windows installer and portable desktop app
 - Windows double-click launcher
 
 ## Requirements
 
+### Desktop Release
+
+- Windows 10/11
+- Node.js is not required
+- npm is not required
+- sqlite3 is not required
+
+If you download the installer or portable build from GitHub Releases, you can run it directly.
+
+### From Source
+
 - Windows
-- Node.js 20.19 or later
+- Node.js 22.5 or later
 - npm
 
-The required database access module is installed with the project dependencies. Users only need Node.js and npm.
+This tool uses the SQLite capability built into Node.js / Electron. It does not require sqlite3 or any separate database tool. When running from source, users only need Node.js and npm.
 
 ## Quick Start
 
-### Option 1: Double-click launcher
+### Option 1: Download the desktop app (recommended)
+
+Download one of these files from GitHub Releases:
+
+```text
+Codex-History-Recovery-Setup-version-x64.exe
+Codex-History-Recovery-Portable-version-x64.exe
+```
+
+`Setup` is the installer build. Double-click it, follow the installer, then open the app from the desktop shortcut or Start menu.
+
+`Portable` is the portable build. It does not need installation; double-click it to open the app.
+
+The desktop app opens the recovery interface directly. You do not need to install Node.js, open a command window, or visit a local URL manually.
+
+### Option 2: Double-click source launcher
 
 Double-click:
 
@@ -66,14 +93,14 @@ On first launch, the script runs:
 ```text
 npm install
 npm run build
-node server.cjs
+node --no-warnings server.cjs
 ```
 
 Then your browser opens the local UI automatically.
 
 Keep the command window open while using the tool. That window is the local recovery service.
 
-### Option 2: Command line
+### Option 3: Command line
 
 ```powershell
 cd D:\Codex\history-recovery
@@ -353,17 +380,15 @@ cd D:\Codex\history-recovery
 restore-codex-sidebar-chat.cmd
 ```
 
-If Node.js is missing, install Node.js 20.19 or later and add it to PATH.
+If Node.js is missing, install Node.js 22.5 or later and add it to PATH.
 
 ### npm install fails
 
-The required database access module is installed with the project dependencies. If dependency installation fails, check:
+If dependency installation fails, check:
 
-- Node.js is 20.19 or later
+- Node.js is 22.5 or later
 - Your network can reach npm
-- Corporate proxy or security software is not blocking native package downloads
-
-If the error comes from the native database dependency, install Node.js 22 LTS and run `npm install` again.
+- Corporate proxy or security software is not blocking dependency downloads
 
 ### Browser does not open automatically
 
@@ -424,13 +449,44 @@ Build and start:
 npm run app
 ```
 
+Start the desktop preview:
+
+```powershell
+npm run desktop
+```
+
+Build the Windows installer and portable app:
+
+```powershell
+npm run dist:win
+```
+
+Build outputs are generated in the `release` directory. This directory is only for local release builds and should not be committed to the repository.
+
+You can also push a version tag and let GitHub Actions build the Windows artifacts and publish them to GitHub Releases:
+
+```powershell
+git tag v2.0.0
+git push origin v2.0.0
+```
+
 ## Project Structure
 
 ```text
 .
+├── .github/
+│   └── workflows/
+├── build/
+│   ├── icon.ico
+│   └── icon.png
+├── electron/
+│   ├── main.cjs
+│   └── preload.cjs
 ├── src/
 │   ├── main.jsx
 │   └── styles.css
+├── docs/
+│   └── images/
 ├── index.html
 ├── server.cjs
 ├── package.json
@@ -439,7 +495,8 @@ npm run app
 ├── postcss.config.js
 ├── vite.config.js
 ├── restore-codex-sidebar-chat.cmd
-└── README.md
+├── README.md
+└── README-EN.md
 ```
 
 ## License
