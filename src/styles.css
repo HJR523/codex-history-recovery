@@ -23,19 +23,33 @@ body {
     BlinkMacSystemFont,
     "Segoe UI",
     sans-serif;
-  
-  background-color: #f8fafc;
-  background-image: 
-    radial-gradient(at 100% 0%, hsla(210, 100%, 94%, 0.8) 0px, transparent 40%),
-    radial-gradient(at 0% 100%, hsla(250, 100%, 96%, 0.8) 0px, transparent 40%),
-    radial-gradient(rgba(15, 23, 42, 0.04) 1px, transparent 1px);
-  background-size: 100% 100%, 100% 100%, 24px 24px;
+
+  background-color: #fff7ed;
+  background-image:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(255, 247, 237, 0.92)),
+    radial-gradient(circle at 12% 8%, rgba(234, 88, 12, 0.12), transparent 28rem),
+    radial-gradient(circle at 88% 12%, rgba(37, 99, 235, 0.1), transparent 30rem),
+    radial-gradient(rgba(15, 23, 42, 0.045) 1px, transparent 1px);
+  background-size: 100% 100%, 100% 100%, 100% 100%, 28px 28px;
   background-attachment: fixed;
   color: #0f172a;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
 }
 
-input, button {
+input,
+button,
+select {
   font: inherit;
+}
+
+button,
+select {
+  touch-action: manipulation;
+}
+
+::selection {
+  background: rgba(251, 146, 60, 0.26);
 }
 
 ::-webkit-scrollbar {
@@ -55,4 +69,15 @@ input, button {
 
 ::-webkit-scrollbar-track {
   background: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
 }

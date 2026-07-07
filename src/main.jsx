@@ -6,7 +6,13 @@ import {
   ShieldCheck,
   Sparkles,
   Activity,
-  Cpu
+  Cpu,
+  Database,
+  FolderSearch,
+  Gauge,
+  ListChecks,
+  RotateCcw,
+  TerminalSquare,
 } from 'lucide-react';
 import './styles.css';
 
@@ -42,25 +48,77 @@ function cx(...parts) {
   return parts.filter(Boolean).join(' ');
 }
 
-function Stat({ label, value, tone = 'slate' }) {
-  const tones = {
-    slate: 'bg-white text-slate-700 ring-slate-200/50 shadow-sm',
-    blue: 'bg-blue-50/80 text-blue-700 ring-blue-100 shadow-sm',
-    green: 'bg-emerald-50/80 text-emerald-700 ring-emerald-100 shadow-sm',
-    amber: 'bg-amber-50/80 text-amber-700 ring-amber-100 shadow-sm',
-    red: 'bg-rose-50/80 text-rose-700 ring-rose-100 shadow-sm',
+function joinDisplayPath(base, file) {
+  const cleanBase = String(base || '').replace(/[\\/]+$/, '');
+  return cleanBase ? `${cleanBase}\\${file}` : file;
+}
+
+const panelClass = 'rounded-lg border border-white/80 bg-white/[0.88] p-5 shadow-soft ring-1 ring-slate-950/[0.03] backdrop-blur-xl sm:p-6';
+const inputClass = 'h-11 w-full rounded-lg border border-slate-200 bg-white px-3.5 text-[13px] text-slate-900 shadow-[inset_0_1px_2px_rgba(15,23,42,0.04)] outline-none transition duration-200 placeholder:text-slate-400 hover:border-slate-300 focus:border-orange-400 focus:ring-4 focus:ring-orange-100 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400';
+
+function SectionHeader({ icon: Icon, title, eyebrow, action, accent = 'orange' }) {
+  const accents = {
+    orange: 'bg-orange-50 text-orange-700 ring-orange-100',
+    blue: 'bg-blue-50 text-blue-700 ring-blue-100',
+    slate: 'bg-slate-100 text-slate-700 ring-slate-200',
+    emerald: 'bg-emerald-50 text-emerald-700 ring-emerald-100',
   };
   return (
-    <div className={cx('rounded-2xl px-5 py-4 ring-1 transition-all hover:shadow-md hover:-translate-y-0.5', tones[tone])}>
-      <div className="flex items-center gap-2 mb-1.5">
+    <div className="mb-5 flex items-start justify-between gap-4">
+      <div className="flex min-w-0 items-center gap-3">
+        {Icon && (
+          <div className={cx('flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ring-1', accents[accent])}>
+            <Icon className="h-5 w-5" />
+          </div>
+        )}
+        <div className="min-w-0">
+          {eyebrow && <div className="text-[11px] font-semibold uppercase text-slate-400">{eyebrow}</div>}
+          <h2 className="truncate text-[16px] font-semibold text-slate-950">{title}</h2>
+        </div>
+      </div>
+      {action}
+    </div>
+  );
+}
+
+function Panel({ children, className }) {
+  return <section className={cx(panelClass, className)}>{children}</section>;
+}
+
+function StatusPill({ tone = 'info', children, busy }) {
+  const tones = {
+    info: 'border-blue-200 bg-blue-50 text-blue-700',
+    good: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+    warn: 'border-amber-200 bg-amber-50 text-amber-800',
+    error: 'border-rose-200 bg-rose-50 text-rose-700',
+  };
+  return (
+    <div className={cx('inline-flex min-h-8 max-w-full items-center gap-2 rounded-full border px-3 py-1 text-[12px] font-semibold', tones[tone])}>
+      <span className={cx('h-1.5 w-1.5 shrink-0 rounded-full bg-current', busy && 'animate-ping')} />
+      <span className="truncate">{children}</span>
+    </div>
+  );
+}
+
+function Stat({ label, value, tone = 'slate' }) {
+  const tones = {
+    slate: 'border-slate-200 bg-white text-slate-700',
+    blue: 'border-blue-200 bg-blue-50/80 text-blue-700',
+    green: 'border-emerald-200 bg-emerald-50/80 text-emerald-700',
+    amber: 'border-amber-200 bg-amber-50/80 text-amber-800',
+    red: 'border-rose-200 bg-rose-50/80 text-rose-700',
+  };
+  return (
+    <div className={cx('rounded-lg border px-4 py-3 shadow-[0_1px_2px_rgba(15,23,42,0.04)]', tones[tone])}>
+      <div className="mb-1.5 flex items-center gap-2">
         <div className={cx("w-1.5 h-1.5 rounded-full", 
           tone === 'green' ? 'bg-emerald-500 animate-pulse-slow' : 
           tone === 'red' ? 'bg-rose-500' : 
           tone === 'blue' ? 'bg-blue-500' : 'bg-slate-400'
         )} />
-        <div className="text-[11px] font-bold opacity-60 tracking-wider uppercase">{label}</div>
+        <div className="text-[11px] font-semibold uppercase text-current opacity-65">{label}</div>
       </div>
-      <div className="text-3xl font-bold tracking-tight">{value ?? '-'}</div>
+      <div className="text-2xl font-semibold tabular-nums tracking-tight">{value ?? '-'}</div>
     </div>
   );
 }
@@ -68,9 +126,9 @@ function Stat({ label, value, tone = 'slate' }) {
 function Field({ label, children, hint }) {
   return (
     <label className="block group">
-      <div className="mb-2.5 flex items-center justify-between gap-3">
-        <span className="text-[13px] font-semibold text-slate-700 group-hover:text-blue-600 transition-colors">{label}</span>
-        {hint && <span className="truncate text-[10px] font-semibold tracking-wider text-blue-600 bg-blue-100/50 px-2.5 py-0.5 rounded-full border border-blue-200">{hint}</span>}
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <span className="text-[13px] font-semibold text-slate-700 transition-colors group-hover:text-orange-700">{label}</span>
+        {hint && <span className="truncate rounded-full border border-slate-200 bg-slate-50 px-2.5 py-0.5 text-[11px] font-semibold text-slate-600">{hint}</span>}
       </div>
       {children}
     </label>
@@ -79,23 +137,25 @@ function Field({ label, children, hint }) {
 
 function Button({ children, tone = 'default', busy, className, disabled, ...props }) {
   const tones = {
-    default: 'bg-white text-slate-700 ring-1 ring-slate-200 shadow-sm hover:bg-slate-50 hover:shadow',
-    primary: 'bg-blue-600 text-white shadow-[0_2px_10px_rgba(37,99,235,0.2)] hover:bg-blue-700 hover:shadow-[0_4px_14px_rgba(37,99,235,0.3)] ring-1 ring-blue-600/50',
-    soft: 'bg-slate-100/80 text-slate-700 ring-1 ring-slate-200/50 hover:bg-slate-200/80',
-    danger: 'bg-rose-600 text-white shadow-[0_2px_10px_rgba(225,29,72,0.2)] hover:bg-rose-700 hover:shadow-[0_4px_14px_rgba(225,29,72,0.3)] ring-1 ring-rose-600/50',
+    default: 'border border-slate-200 bg-white text-slate-700 shadow-sm hover:border-slate-300 hover:bg-slate-50',
+    primary: 'border border-orange-600 bg-orange-600 text-white shadow-[0_10px_20px_-12px_rgba(234,88,12,0.75)] hover:bg-orange-700',
+    accent: 'border border-blue-600 bg-blue-600 text-white shadow-[0_10px_20px_-12px_rgba(37,99,235,0.75)] hover:bg-blue-700',
+    soft: 'border border-slate-200 bg-slate-50 text-slate-700 hover:border-slate-300 hover:bg-white',
+    danger: 'border border-rose-600 bg-rose-600 text-white shadow-[0_10px_20px_-12px_rgba(225,29,72,0.75)] hover:bg-rose-700',
   };
   return (
     <button
       className={cx(
-        'relative overflow-hidden inline-flex h-10 items-center justify-center gap-2 rounded-xl px-4 text-[13px] font-semibold transition-all duration-200 ease-out outline-none focus:ring-2 focus:ring-blue-500/50 focus:ring-offset-1',
-        'disabled:cursor-not-allowed disabled:opacity-50 disabled:grayscale-[0.3]',
+        'relative inline-flex min-h-11 items-center justify-center gap-2 rounded-lg px-4 text-[13px] font-semibold outline-none transition duration-200 ease-out active:scale-[0.98] focus-visible:ring-4 focus-visible:ring-orange-100',
+        'disabled:cursor-not-allowed disabled:opacity-50 disabled:grayscale-[0.2] disabled:active:scale-100',
         tones[tone],
         className,
       )}
+      type={props.type ?? 'button'}
       disabled={disabled || busy}
       {...props}
     >
-      {busy && <Loader2 className="h-4 w-4 animate-spin absolute" />}
+      {busy && <Loader2 className="absolute h-4 w-4 animate-spin" />}
       <span className={cx('flex items-center gap-2 transition-opacity', busy && 'opacity-0')}>
         {children}
       </span>
@@ -106,49 +166,51 @@ function Button({ children, tone = 'default', busy, className, disabled, ...prop
 function Input(props) {
   return (
     <input
-      className="h-10 w-full rounded-xl bg-white/50 backdrop-blur-sm border border-slate-200/80 px-4 text-[13px] text-slate-900 shadow-[inset_0_2px_4px_rgba(0,0,0,0.02)] outline-none transition-all placeholder:text-slate-400 hover:bg-white focus:bg-white focus:border-blue-400 focus:ring-[3px] focus:ring-blue-100"
+      className={inputClass}
       {...props}
     />
   );
 }
 
 function ProviderTable({ rows }) {
+  const tableGridClass = 'grid grid-cols-[minmax(0,1fr)_54px_72px_46px] gap-2 sm:grid-cols-[minmax(0,1fr)_64px_84px_56px] sm:gap-3';
+
   if (!rows?.length) {
     return (
-      <div className="flex h-full min-h-[220px] flex-col items-center justify-center rounded-2xl bg-slate-50/50 border border-dashed border-slate-300 text-sm text-slate-400">
-        <Activity className="h-8 w-8 mb-3 opacity-30 text-slate-500" />
-        <p>扫描后显示数据图谱</p>
+      <div className="flex min-h-[176px] flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 bg-slate-50/70 px-6 text-center text-sm text-slate-500 sm:min-h-[190px]">
+        <Activity className="mb-3 h-8 w-8 text-slate-400" />
+        <p className="font-medium">扫描后显示 Provider 分布</p>
       </div>
     );
   }
 
   return (
-    <div className="overflow-hidden rounded-2xl bg-white border border-slate-200/80 shadow-sm">
-      <div className="grid grid-cols-[minmax(0,1fr)_72px_86px_64px] gap-3 border-b border-slate-100 bg-slate-50 px-4 py-3 text-[11px] font-bold uppercase tracking-wider text-slate-500">
+    <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+      <div className={cx(tableGridClass, 'border-b border-slate-200 bg-slate-50 px-3 py-3 text-[11px] font-semibold uppercase text-slate-500 sm:px-4')}>
         <div>Provider 分组</div>
         <div className="text-center">归档</div>
         <div className="text-center">来源</div>
         <div className="text-right">数量</div>
       </div>
-      <div className="divide-y divide-slate-50 text-[13px]">
+      <div className="divide-y divide-slate-100 text-[13px]">
         {rows.map((row, index) => {
           const archived = String(row.archived) === '1';
           return (
-            <div key={`${row.model_provider}-${index}`} className="grid grid-cols-[minmax(0,1fr)_72px_86px_64px] items-center gap-3 px-4 py-3.5 transition-colors hover:bg-blue-50/50">
-              <div className="min-w-0 truncate font-medium text-slate-900" title={row.model_provider}>
+            <div key={`${row.model_provider}-${index}`} className={cx(tableGridClass, 'items-center px-3 py-3.5 transition-colors hover:bg-orange-50/45 sm:px-4')}>
+              <div className="min-w-0 break-all font-medium leading-5 text-slate-900" title={row.model_provider}>
                 {row.model_provider}
               </div>
               <div className="text-center">
-                <span className={cx("inline-flex min-w-8 justify-center rounded-md px-2.5 py-1 text-[11px] font-semibold", archived ? 'bg-slate-100 text-slate-600' : 'bg-emerald-50 text-emerald-700 border border-emerald-100')}>
+                <span className={cx("inline-flex min-w-8 justify-center rounded-md border px-2 py-1 text-[11px] font-semibold", archived ? 'border-emerald-100 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-slate-50 text-slate-600')}>
                   {archived ? '√' : '×'}
                 </span>
               </div>
               <div className="text-center">
-                <span className="inline-flex justify-center rounded-md border border-purple-100 bg-purple-50 px-2.5 py-1 text-[11px] font-semibold text-purple-700">
+                <span className="inline-flex max-w-full justify-center rounded-md border border-blue-100 bg-blue-50 px-2 py-1 text-[11px] font-semibold text-blue-700">
                   {String(row.thread_source).replaceAll("'", '')}
                 </span>
               </div>
-              <div className="text-right font-mono text-[15px] font-bold text-blue-700">
+              <div className="text-right font-mono text-[15px] font-semibold text-orange-700">
                 {row.n}
               </div>
             </div>
@@ -162,47 +224,47 @@ function ProviderTable({ rows }) {
 function PlanCard({ plan }) {
   if (!plan) {
     return (
-      <div className="flex h-full flex-col justify-center rounded-2xl bg-white border border-slate-200/80 p-8 text-sm text-slate-400 text-center shadow-sm">
-        <Cpu className="h-10 w-10 mx-auto mb-3 opacity-30 text-slate-500" />
-        <p>执行计划将在计算后显示</p>
+      <div className="flex min-h-[176px] flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 bg-white px-6 text-center text-sm text-slate-500 sm:min-h-[190px]">
+        <Cpu className="mb-3 h-9 w-9 text-slate-400" />
+        <p className="font-medium">检查方案后显示执行计划</p>
       </div>
     );
   }
 
   return (
-    <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-blue-50/80 to-indigo-50/30 border border-blue-200/60 p-6 shadow-sm">
-      <div className="absolute top-0 right-0 p-4 opacity-[0.04] pointer-events-none">
-        <ShieldCheck className="w-32 h-32 text-blue-600" />
+    <div className="relative overflow-hidden rounded-lg border border-blue-200/70 bg-gradient-to-br from-blue-50 via-white to-orange-50/60 p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] sm:p-6">
+      <div className="pointer-events-none absolute right-3 top-3 text-blue-600 opacity-[0.06]">
+        <ShieldCheck className="h-28 w-28" />
       </div>
-      
-      <div className="mb-6 flex items-center gap-2 text-sm font-bold text-blue-800">
+
+      <div className="relative z-10 mb-5 flex items-center gap-2 text-sm font-semibold text-blue-800">
         <span className="relative flex h-2.5 w-2.5">
-          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
-          <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-blue-500"></span>
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-400 opacity-60" />
+          <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-blue-500" />
         </span>
         检查通过，随时可执行
       </div>
-      
-      <div className="grid grid-cols-2 gap-4 relative z-10">
+
+      <div className="relative z-10 grid grid-cols-2 gap-3">
         <Stat label="数据变更" value={plan.jsonlToChange} tone="blue" />
         <Stat label="影响线程" value={plan.threadsToMigrate} tone="slate" />
         <Stat label="文件锁定" value={plan.jsonlLockedDryRun} tone={plan.jsonlLockedDryRun ? 'amber' : 'green'} />
         <Stat label="损坏发现" value={plan.jsonlBadDryRun} tone={plan.jsonlBadDryRun ? 'red' : 'green'} />
       </div>
-      
-      <div className="mt-6 rounded-xl bg-white/80 border border-white p-4 text-[12px] shadow-sm relative z-10">
+
+      <div className="relative z-10 mt-5 rounded-lg border border-white bg-white/85 p-4 text-[12px] shadow-sm">
         <div className="flex items-start gap-3">
-          <div className="font-semibold text-slate-600 w-12 pt-0.5">Target</div>
-          <div className="flex-1 px-2.5 py-0.5 bg-blue-100/50 text-blue-800 rounded font-mono font-medium border border-blue-200">{plan.targetProvider}</div>
+          <div className="w-12 pt-0.5 font-semibold text-slate-600">Target</div>
+          <div className="min-w-0 flex-1 rounded-md border border-blue-100 bg-blue-50 px-2.5 py-1 font-mono font-medium text-blue-800">{plan.targetProvider}</div>
         </div>
-        <div className="flex items-start gap-3 mt-3">
-          <div className="font-semibold text-slate-600 w-12 pt-0.5">Origin</div>
-          <div className="flex-1 flex flex-wrap gap-1.5">
+        <div className="mt-3 flex items-start gap-3">
+          <div className="w-12 pt-0.5 font-semibold text-slate-600">Origin</div>
+          <div className="flex min-w-0 flex-1 flex-wrap gap-1.5">
             {plan.oldProviders?.length ? plan.oldProviders.map(p => (
-              <span key={p} className="px-2 py-0.5 bg-slate-100 text-slate-700 rounded border border-slate-200/60 font-mono">
+              <span key={p} className="rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5 font-mono text-slate-700">
                 {p}
               </span>
-            )) : <span className="text-slate-400 italic py-0.5 font-medium">仅处理空记录</span>}
+            )) : <span className="py-0.5 font-medium text-slate-400">仅处理空记录</span>}
           </div>
         </div>
       </div>
@@ -227,11 +289,13 @@ function App() {
   const [logs, setLogs] = useState([{ time: now(), text: 'System ready. Awaiting parameters...' }]);
 
   const providerOptions = scan?.providers ?? [];
+  const configProvider = scan?.configModelProvider ?? '';
   const latestProvider = scan?.latestUser?.model_provider ?? '';
   const selectedBackupInfo = backups.find((item) => item.path === selectedBackup);
   const rootHint = defaultsInfo?.root === root ? (defaultsInfo.rootExists ? '已自动检测' : '需确认') : root ? '已填写' : '未填写';
   const stateDbReady = Boolean(defaultsInfo?.root === root && defaultsInfo.rootExists);
   const stateDbStatus = stateDbReady ? '已就绪' : root ? '待确认' : '未就绪';
+  const configTomlPath = root ? joinDisplayPath(root, 'config.toml') : '当前 Codex root\\config.toml';
 
   const payload = useMemo(
     () => ({
@@ -255,6 +319,23 @@ function App() {
   function resetPlan() {
     setPlan(null);
     setApplyResult(null);
+  }
+
+  function providersExceptTarget(provider, source = scan) {
+    const targetProvider = String(provider || '').trim();
+    return targetProvider
+      ? (source?.providers || []).filter((item) => item !== targetProvider)
+      : [];
+  }
+
+  function fillTarget(provider, sourceLabel) {
+    const targetProvider = String(provider || '').trim();
+    if (!targetProvider) return false;
+    setTarget(targetProvider);
+    setOldProviders(providersExceptTarget(targetProvider));
+    resetPlan();
+    log(`Target Provider loaded from ${sourceLabel}: ${targetProvider}`);
+    return true;
   }
 
   async function call(action, fn) {
@@ -335,33 +416,60 @@ function App() {
     if (!data) return;
     setScan(data);
     setDefaultsInfo((info) => info ? { ...info, root: data.root || root, rootExists: true, sqliteEngine: data.sqliteEngine || info.sqliteEngine } : { root: data.root || root, rootExists: true, sqliteEngine: data.sqliteEngine });
-    setTarget('');
-    setOldProviders([]);
+    const configTarget = data.configModelProvider || '';
+    setTarget(configTarget);
+    setOldProviders(configTarget ? (data.providers || []).filter((provider) => provider !== configTarget) : []);
     setIncludeSubagents(null);
     resetPlan();
-    setStatus({ tone: 'good', text: '扫描完成，请配置参数' });
+    setStatus({ tone: configTarget ? 'good' : 'warn', text: configTarget ? '扫描完成，已读取 config provider' : '扫描完成，请手动填写 Target Provider' });
     log(`Found providers: ${data.providers.join(', ') || '(none)'}`);
-    if (data.configModelProvider && data.suggestedTarget && data.configModelProvider !== data.suggestedTarget) {
-      log(`[WARN] config.toml=${data.configModelProvider}, suggested target=${data.suggestedTarget}; config will be synced to the confirmed Target Provider during restore.`);
+    if (configTarget) {
+      log(`Target Provider loaded from config.toml: ${configTarget}`);
+      log(`Auto-selected old providers: ${(data.providers || []).filter((provider) => provider !== configTarget).join(', ') || '(none)'}`);
+    } else {
+      log('[WARN] config.toml 未设置顶层 model_provider，请手动填写 Target Provider');
+    }
+    if (configTarget && data.latestUser?.model_provider && configTarget !== data.latestUser.model_provider) {
+      log(`[WARN] config.toml 检测到 ${configTarget}，但最新聊天写入的是 ${data.latestUser.model_provider}。如果你最近切换过 provider，请确认要恢复到哪一个。`);
     }
     refreshBackups(data.root || root, false);
   }
 
+  function useConfigProvider() {
+    if (!scan) {
+      warn('请先点击深度扫描，再从 config 填入');
+      return;
+    }
+    if (!configProvider) {
+      warn('未在 config.toml 中找到顶层 model_provider，请手动填写 Target Provider');
+      return;
+    }
+    fillTarget(configProvider, 'config.toml');
+    if (latestProvider && latestProvider !== configProvider) {
+      warn(`config.toml 检测到 ${configProvider}，但最新聊天写入的是 ${latestProvider}，请确认要恢复到哪一个`);
+    }
+  }
+
   function useLatestProvider() {
     if (!scan) {
-      warn('请先点击深度扫描，再使用最新聊天');
+      warn('请先点击深度扫描，再从最新聊天填入');
       return;
     }
     if (!latestProvider) {
       warn('扫描结果里没有可用的最新用户主聊天');
       return;
     }
-    setTarget(latestProvider);
-    resetPlan();
-    log(`Auto-filled: ${latestProvider}`);
-    if (oldProviders.includes(latestProvider)) {
-      warn(`"${latestProvider}" 已在 Target Overrides 中，请先取消旧 Provider 选择`);
+    fillTarget(latestProvider, 'latest user thread');
+    if (configProvider && latestProvider !== configProvider) {
+      warn(`最新聊天写入的是 ${latestProvider}，但 config.toml 检测到 ${configProvider}，请确认要恢复到哪一个`);
     }
+  }
+
+  function handleTargetChange(value) {
+    const nextTarget = value.trim();
+    setTarget(value);
+    setOldProviders((items) => items.filter((provider) => provider !== nextTarget));
+    resetPlan();
   }
 
   function toggleOldProvider(provider) {
@@ -508,120 +616,148 @@ function App() {
     refreshBackups(root, false);
   }
 
-  const statusColors = {
-    info: 'text-blue-700 bg-blue-50 ring-blue-200/50',
-    good: 'text-emerald-700 bg-emerald-50 ring-emerald-200/50',
-    warn: 'text-amber-700 bg-amber-50 ring-amber-200/50',
-    error: 'text-rose-700 bg-rose-50 ring-rose-200/50',
-  }[status.tone];
+  const progressSteps = [
+    { label: '目录', value: root ? '已填写' : '待填写', done: Boolean(root) },
+    { label: '扫描', value: scan ? '已完成' : '待扫描', done: Boolean(scan) },
+    { label: '方案', value: plan ? '已生成' : '待检查', done: Boolean(plan) },
+    { label: '恢复', value: applyResult ? (applyResult.passed ? '完成' : '有警告') : '待执行', done: Boolean(applyResult), warn: applyResult && !applyResult.passed },
+  ];
 
   return (
-    <div className="min-h-screen flex flex-col relative z-10 selection:bg-blue-100">
-      <header className="sticky top-0 z-50 border-b border-slate-200/60 bg-white/70 backdrop-blur-xl">
-        <div className="mx-auto flex w-full max-w-[1400px] items-center justify-between px-6 py-4">
-          <div className="flex items-center gap-4">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white ring-1 ring-slate-200 text-slate-800 shadow-sm">
-              <ArchiveRestore className="h-5 w-5 text-blue-600" />
+    <div className="relative z-10 flex min-h-screen flex-col selection:bg-orange-100">
+      <header className="sticky top-0 z-50 border-b border-slate-200/70 bg-white/[0.82] backdrop-blur-xl">
+        <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-3 px-4 py-3 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-orange-100 bg-orange-50 text-orange-700 shadow-sm">
+              <ArchiveRestore className="h-5 w-5" />
             </div>
-            <div>
-              <h1 className="text-lg font-bold tracking-tight text-slate-900">Codex Recovery Console</h1>
-              <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-widest mt-0.5">Data Migration Tool</p>
+            <div className="min-w-0">
+              <h1 className="truncate text-lg font-semibold text-slate-950">Codex History Recovery</h1>
+              <p className="truncate text-[12px] font-medium text-slate-500">本地聊天记录恢复控制台</p>
             </div>
           </div>
-          <div className={cx('flex items-center gap-2 rounded-full px-3.5 py-1.5 text-[11px] font-bold uppercase tracking-wider ring-1', statusColors)}>
-            <div className={cx("w-1.5 h-1.5 rounded-full", busy ? 'bg-current animate-ping' : 'bg-current')} />
-            {status.text}
-          </div>
+          <StatusPill tone={status.tone} busy={busy}>{status.text}</StatusPill>
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-[1400px] flex-1 px-4 sm:px-6 py-8">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-          
-          <div className="lg:col-span-5 flex flex-col gap-6 lg:sticky lg:top-[90px]">
-            <div className="rounded-2xl bg-white/70 backdrop-blur-xl p-6 ring-1 ring-slate-200/60 shadow-glass hover:shadow-glass-hover transition-all relative overflow-hidden">
-              <div className="absolute top-0 inset-x-0 h-[2px] bg-gradient-to-r from-blue-300 via-indigo-300 to-purple-300"></div>
-              <div className="mb-6 flex items-center justify-between">
-                <h2 className="text-[16px] font-bold text-slate-900">环境映射</h2>
-                <Button tone="soft" onClick={() => detectDefaults(true)} busy={busy === 'defaults'} className="h-9 px-3 text-[12px]">重新检测目录</Button>
+      <main className="mx-auto w-full max-w-[1440px] flex-1 px-4 py-6 sm:px-6 lg:py-8">
+        <section className="mb-6 overflow-hidden rounded-lg border border-white/80 bg-white/[0.88] p-5 shadow-soft ring-1 ring-slate-950/[0.03] backdrop-blur-xl sm:p-6">
+          <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
+            <div className="max-w-3xl">
+              <div className="mb-2 inline-flex rounded-full border border-orange-100 bg-orange-50 px-3 py-1 text-[12px] font-semibold text-orange-700">
+                Local Recovery Workbench
               </div>
+              <h2 className="text-2xl font-semibold tracking-tight text-slate-950 sm:text-3xl">恢复消失的 Codex 侧边栏聊天记录</h2>
+              <p className="mt-2 max-w-2xl text-[14px] leading-6 text-slate-600">
+                本机状态读取、Provider 迁移、备份回滚集中在同一套流程里，开始恢复前会先生成可检查方案。
+              </p>
+            </div>
+            <div className="grid min-w-0 grid-cols-2 gap-2 sm:grid-cols-4 xl:w-[520px]">
+              {progressSteps.map((step, index) => (
+                <div key={step.label} className={cx('rounded-lg border px-3 py-3', step.warn ? 'border-amber-200 bg-amber-50 text-amber-800' : step.done ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-slate-50 text-slate-500')}>
+                  <div className="mb-1 flex items-center justify-between gap-2 text-[11px] font-semibold">
+                    <span>{String(index + 1).padStart(2, '0')}</span>
+                    <span className={cx('h-1.5 w-1.5 rounded-full', step.warn ? 'bg-amber-500' : step.done ? 'bg-emerald-500' : 'bg-slate-300')} />
+                  </div>
+                  <div className="text-[13px] font-semibold text-slate-900">{step.label}</div>
+                  <div className="mt-0.5 text-[12px] font-medium opacity-80">{step.value}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-12">
+          <div className="flex flex-col gap-6 lg:sticky lg:top-[92px] lg:col-span-5">
+            <Panel>
+              <SectionHeader
+                icon={FolderSearch}
+                title="环境映射"
+                eyebrow="Step 01"
+                action={<Button tone="soft" onClick={() => detectDefaults(true)} busy={busy === 'defaults'} className="min-h-9 px-3 text-[12px]">重新检测目录</Button>}
+              />
               <div className="space-y-5">
                 <Field label="Root Directory" hint={rootHint}>
-                  <div className="flex gap-2">
+                  <div className="flex flex-col gap-2 sm:flex-row">
                     <Input value={root} onChange={(e) => updateRoot(e.target.value)} />
-                    <Button onClick={browseRoot} className="shrink-0 min-w-[72px] px-3">更改</Button>
+                    <Button onClick={browseRoot} className="shrink-0 px-4">更改</Button>
                   </div>
                 </Field>
-                <div className={cx('rounded-xl border px-4 py-3 text-[12px] font-semibold', stateDbReady ? 'border-emerald-100 bg-emerald-50/70 text-emerald-700' : 'border-amber-100 bg-amber-50/70 text-amber-700')}>
+                <div className={cx('rounded-lg border px-4 py-3 text-[12px] font-semibold', stateDbReady ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-amber-200 bg-amber-50 text-amber-800')}>
                   <div className="flex items-center justify-between gap-3">
                     <span>状态数据库</span>
-                    <span className={cx('rounded-full border bg-white/70 px-2.5 py-0.5 text-[10px] tracking-wider', stateDbReady ? 'border-emerald-200 text-emerald-700' : 'border-amber-200 text-amber-700')}>{stateDbStatus}</span>
+                    <span className={cx('rounded-full border bg-white/75 px-2.5 py-0.5 text-[11px]', stateDbReady ? 'border-emerald-200 text-emerald-700' : 'border-amber-200 text-amber-800')}>{stateDbStatus}</span>
                   </div>
                 </div>
                 <div className="flex gap-3 pt-2">
-                  <Button onClick={handleScan} tone="primary" className="flex-1">深度扫描</Button>
+                  <Button onClick={handleScan} tone="primary" busy={busy === 'scan'} className="flex-1">深度扫描</Button>
                 </div>
               </div>
-            </div>
+            </Panel>
 
-            <div className="rounded-2xl bg-white/70 backdrop-blur-xl p-6 ring-1 ring-slate-200/60 shadow-glass hover:shadow-glass-hover transition-all relative">
-              <div className="mb-6 flex items-center justify-between">
-                <h2 className="text-[16px] font-bold text-slate-900">迁移策略</h2>
-                <Sparkles className="h-4 w-4 text-amber-500" />
-              </div>
+            <Panel>
+              <SectionHeader icon={ListChecks} title="迁移策略" eyebrow="Step 02" action={<Sparkles className="mt-2 h-4 w-4 text-orange-500" />} />
               <div className="space-y-6">
                 <Field label="Target Injection (目标 Provider)">
-                  <div className="flex gap-2">
-                    <input list="provider-options" value={target} onChange={(e) => setTarget(e.target.value)} className="h-10 min-w-0 flex-1 rounded-xl bg-white border border-slate-200/80 px-4 text-[13px] text-slate-900 shadow-sm outline-none focus:border-blue-400 focus:ring-[3px] focus:ring-blue-100 transition-all" />
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <input list="provider-options" value={target} onChange={(e) => handleTargetChange(e.target.value)} className={cx(inputClass, 'min-w-0 flex-1')} />
                     <datalist id="provider-options">{providerOptions.map((p) => <option value={p} key={p} />)}</datalist>
-                    <Button tone="soft" onClick={useLatestProvider} disabled={!scan} className="shrink-0 px-3">使用最新聊天</Button>
+                    <Button tone="soft" onClick={useConfigProvider} disabled={!scan} className="shrink-0 px-3">从 config 填入</Button>
+                    <Button tone="soft" onClick={useLatestProvider} disabled={!scan} className="shrink-0 px-3">从最新聊天填入</Button>
                   </div>
-                  <div className="mt-2 rounded-xl border border-blue-100 bg-blue-50/70 px-3 py-2 text-[12px] leading-5 text-slate-600">
+                  <div className="mt-2 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-[12px] leading-5 text-slate-700">
                     <span className="font-semibold text-blue-700">提示：</span>
-                    如果你使用 GPT/ChatGPT 账号登录，Target Provider 通常是 <code className="rounded bg-white/80 px-1.5 py-0.5 font-mono text-blue-700">openai</code>。如果使用自定义 provider、API Key 或本地 provider，请填写当前实际可用的 provider。开始恢复时，工具会把 config.toml 同步为该 Target Provider。
+                    当前默认读取 <code className="rounded bg-white/80 px-1.5 py-0.5 font-mono text-blue-700">{configTomlPath}</code> 顶层 <code className="rounded bg-white/80 px-1.5 py-0.5 font-mono text-blue-700">model_provider</code> 作为 Target Provider。使用 GPT/ChatGPT 账号并直接使用账号额度时通常是 <code className="rounded bg-white/80 px-1.5 py-0.5 font-mono text-blue-700">openai</code>；如果使用 Cockpit Tools、本地代理、API 中转或自定义 provider，则可能是 <code className="rounded bg-white/80 px-1.5 py-0.5 font-mono text-blue-700">codex_local_access</code>、<code className="rounded bg-white/80 px-1.5 py-0.5 font-mono text-blue-700">cpa</code>、<code className="rounded bg-white/80 px-1.5 py-0.5 font-mono text-blue-700">right_code</code> 等名称。开始恢复时，工具会把 config.toml 同步为你确认的 Target Provider。
+                    {scan && (
+                      <span className="mt-2 block font-semibold text-slate-700">
+                        {configProvider
+                          ? `当前 config provider：${configProvider}${latestProvider && latestProvider !== configProvider ? `；最新聊天 provider：${latestProvider}，两者不一致时请手动确认。` : ''}`
+                          : '未在 config.toml 中找到顶层 model_provider，请手动填写，或用最新聊天作为兜底参考。'}
+                      </span>
+                    )}
                   </div>
                 </Field>
 
                 <Field label="Include Subagents (包含子代理)">
-                  <div className="grid grid-cols-2 gap-2">
-                    <button onClick={() => { setIncludeSubagents(true); resetPlan(); }} className={cx('rounded-xl ring-1 px-3 py-2 text-[12px] font-bold transition-all shadow-sm', includeSubagents === true ? 'bg-blue-50 text-blue-700 ring-blue-300' : 'bg-white text-slate-500 ring-slate-200 hover:text-slate-700 hover:bg-slate-50')}>TRUE (是)</button>
-                    <button onClick={() => { setIncludeSubagents(false); resetPlan(); }} className={cx('rounded-xl ring-1 px-3 py-2 text-[12px] font-bold transition-all shadow-sm', includeSubagents === false ? 'bg-slate-800 text-white ring-slate-800' : 'bg-white text-slate-500 ring-slate-200 hover:text-slate-700 hover:bg-slate-50')}>FALSE (否)</button>
+                  <div className="grid grid-cols-2 gap-2 rounded-lg border border-slate-200 bg-slate-50 p-1">
+                    <button type="button" onClick={() => { setIncludeSubagents(true); resetPlan(); }} className={cx('min-h-10 rounded-md px-3 text-[12px] font-semibold outline-none transition duration-200 focus-visible:ring-4 focus-visible:ring-orange-100', includeSubagents === true ? 'bg-white text-orange-700 shadow-sm ring-1 ring-orange-200' : 'text-slate-500 hover:bg-white/70 hover:text-slate-800')}>TRUE (是)</button>
+                    <button type="button" onClick={() => { setIncludeSubagents(false); resetPlan(); }} className={cx('min-h-10 rounded-md px-3 text-[12px] font-semibold outline-none transition duration-200 focus-visible:ring-4 focus-visible:ring-orange-100', includeSubagents === false ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-500 hover:bg-white/70 hover:text-slate-800')}>FALSE (否)</button>
                   </div>
                 </Field>
 
                 <Field label="Target Overrides (要替换的旧 Provider)" hint="不要选目标 Provider">
-                  <div className="min-h-[90px] rounded-xl bg-slate-50/50 border border-slate-200/60 shadow-inner p-3 flex flex-wrap gap-2">
+                  <div className="flex min-h-[96px] flex-wrap gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
                     {providerOptions.length ? providerOptions.map((p) => {
                       const sel = oldProviders.includes(p);
                       const isTargetProvider = target.trim() && p === target.trim();
                       const hasConflict = sel && isTargetProvider;
-                      return <button key={p} onClick={() => toggleOldProvider(p)} title={hasConflict ? '已选为旧 Provider，但它现在是 Target Provider，点击取消' : isTargetProvider ? '这是 Target Provider，不能作为旧 Provider' : ''} className={cx('rounded-md px-2.5 py-1.5 text-[11px] font-semibold transition-all border shadow-sm flex items-center gap-1.5', hasConflict ? 'bg-rose-50 border-rose-200 text-rose-700' : isTargetProvider ? 'bg-amber-50 border-amber-200 text-amber-700' : sel ? 'bg-slate-800 border-slate-800 text-white' : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300')}><div className={cx("w-1.5 h-1.5 rounded-full", hasConflict ? "bg-rose-400" : isTargetProvider ? "bg-amber-400" : sel ? "bg-green-400" : "bg-slate-300")}></div>{p}</button>
-                    }) : <div className="text-[12px] text-slate-400 m-auto font-medium">请先执行扫描</div>}
+                      return <button type="button" key={p} onClick={() => toggleOldProvider(p)} title={hasConflict ? '已选为旧 Provider，但它现在是 Target Provider，点击取消' : isTargetProvider ? '这是 Target Provider，不能作为旧 Provider' : ''} className={cx('flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[11px] font-semibold shadow-sm outline-none transition duration-200 focus-visible:ring-4 focus-visible:ring-orange-100', hasConflict ? 'border-rose-200 bg-rose-50 text-rose-700' : isTargetProvider ? 'border-amber-200 bg-amber-50 text-amber-800' : sel ? 'border-slate-900 bg-slate-900 text-white' : 'border-slate-200 bg-white text-slate-600 hover:border-orange-200 hover:text-orange-700')}><span className={cx("h-1.5 w-1.5 rounded-full", hasConflict ? "bg-rose-400" : isTargetProvider ? "bg-amber-400" : sel ? "bg-emerald-400" : "bg-slate-300")} />{p}</button>
+                    }) : <div className="m-auto text-[12px] font-medium text-slate-400">请先执行扫描</div>}
                   </div>
                 </Field>
 
-                <div className="grid grid-cols-2 gap-3 pt-4 border-t border-slate-100">
-                  <Button disabled={!scan} onClick={handlePlan} className="col-span-1">检查方案</Button>
-                  <Button tone="primary" disabled={!plan} onClick={handleApply} className="col-span-1">开始恢复</Button>
+                <div className="grid grid-cols-1 gap-3 border-t border-slate-100 pt-4 sm:grid-cols-2">
+                  <Button disabled={!scan} busy={busy === 'plan'} onClick={handlePlan}>检查方案</Button>
+                  <Button tone="primary" busy={busy === 'apply'} disabled={!plan} onClick={handleApply}>开始恢复</Button>
                 </div>
               </div>
-            </div>
+            </Panel>
 
-            <div className="rounded-2xl bg-white/70 backdrop-blur-xl p-6 ring-1 ring-slate-200/60 shadow-glass hover:shadow-glass-hover transition-all relative">
-              <div className="mb-5 flex items-center justify-between gap-3">
-                <div>
-                  <h2 className="text-[16px] font-bold text-slate-900">备份回滚</h2>
-                  <p className="mt-1 text-[12px] font-medium text-slate-500">只显示本工具生成的备份，可还原或删除</p>
-                </div>
-                <Button tone="soft" onClick={() => refreshBackups(root)} busy={busy === 'backups'} className="h-9 px-3 text-[12px]">刷新备份</Button>
-              </div>
+            <Panel>
+              <SectionHeader
+                icon={RotateCcw}
+                title="备份回滚"
+                eyebrow="Safety"
+                accent="emerald"
+                action={<Button tone="soft" onClick={() => refreshBackups(root)} busy={busy === 'backups'} className="min-h-9 px-3 text-[12px]">刷新备份</Button>}
+              />
 
               <div className="space-y-4">
                 <Field label="Backup Snapshot" hint={backups.length ? `${backups.length} 个备份` : '暂无备份'}>
                   <select
                     value={selectedBackup}
                     onChange={(e) => setSelectedBackup(e.target.value)}
-                    className="h-10 w-full rounded-xl bg-white border border-slate-200/80 px-4 text-[13px] text-slate-900 shadow-sm outline-none transition-all hover:bg-slate-50 focus:border-blue-400 focus:ring-[3px] focus:ring-blue-100"
+                    className={inputClass}
                   >
                     {backups.length ? backups.map((item) => (
                       <option key={item.path} value={item.path}>
@@ -631,7 +767,7 @@ function App() {
                   </select>
                 </Field>
 
-                <div className="rounded-xl border border-slate-200/70 bg-slate-50/70 px-4 py-3 text-[12px] text-slate-600">
+                <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-[12px] text-slate-600">
                   {selectedBackupInfo ? (
                     <div className="space-y-1.5">
                       <div className="flex justify-between gap-3">
@@ -648,19 +784,19 @@ function App() {
                   )}
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <Button tone="danger" disabled={!selectedBackup} busy={busy === 'delete-backup'} onClick={handleDeleteBackup}>
                     删除当前备份
                   </Button>
-                  <Button tone="primary" disabled={!selectedBackup} busy={busy === 'restore-backup'} onClick={handleRestoreBackup}>
+                  <Button tone="accent" disabled={!selectedBackup} busy={busy === 'restore-backup'} onClick={handleRestoreBackup}>
                     恢复此备份
                   </Button>
                 </div>
 
-                <div className="rounded-xl border border-amber-100 bg-amber-50/60 px-4 py-3">
-                  <div className="mb-3 flex items-center justify-between gap-3">
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+                  <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <div>
-                      <div className="text-[13px] font-bold text-amber-900">过期备份清理</div>
+                      <div className="text-[13px] font-semibold text-amber-950">过期备份清理</div>
                       <p className="mt-1 text-[12px] leading-5 text-amber-800/80">保留最新的本工具备份，删除更旧的备份。</p>
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
@@ -671,7 +807,7 @@ function App() {
                         step="1"
                         value={backupKeepCount}
                         onChange={(e) => setBackupKeepCount(e.target.value)}
-                        className="h-9 w-16 rounded-lg border border-amber-200 bg-white px-2 text-center text-[13px] font-semibold text-slate-900 outline-none focus:border-amber-400 focus:ring-[3px] focus:ring-amber-100"
+                        className="h-9 w-16 rounded-lg border border-amber-200 bg-white px-2 text-center text-[13px] font-semibold text-slate-900 outline-none transition focus:border-amber-400 focus:ring-4 focus:ring-amber-100"
                       />
                       <span className="text-[12px] font-semibold text-amber-900">个</span>
                     </div>
@@ -681,41 +817,51 @@ function App() {
                   </Button>
                 </div>
               </div>
-            </div>
+            </Panel>
           </div>
 
-          <div className="lg:col-span-7 flex flex-col gap-6">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="flex flex-col gap-6 lg:col-span-7">
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
               <Stat label="Total" value={scan?.providers?.length ?? 0} />
               <Stat label="Threads" value={plan?.threadsToMigrate ?? '-'} tone="blue" />
               <Stat label="JSONL" value={plan?.jsonlToChange ?? '-'} tone="amber" />
               <Stat label="Status" value={applyResult ? (applyResult.passed ? 'OK' : 'WARN') : '-'} tone={applyResult?.passed ? 'green' : applyResult ? 'red' : 'slate'} />
             </div>
 
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-              <div className="flex flex-col h-full"><ProviderTable rows={scan?.providerRows} /></div>
-              <div className="flex flex-col h-full"><PlanCard plan={plan} /></div>
-            </div>
+            <Panel className="min-w-0">
+              <SectionHeader icon={Database} title="Provider 概览" eyebrow="Scan Result" accent="blue" />
+              <ProviderTable rows={scan?.providerRows} />
+            </Panel>
 
-            <div className="mt-2 flex-1 min-h-[300px] overflow-hidden rounded-2xl bg-slate-900 border border-slate-800 shadow-2xl flex flex-col font-mono relative">
-              <div className="flex items-center justify-between border-b border-slate-700/50 bg-slate-800/50 px-4 py-3 z-10">
-                <div className="flex gap-2">
-                  <div className="h-2.5 w-2.5 rounded-full bg-rose-500"></div><div className="h-2.5 w-2.5 rounded-full bg-amber-500"></div><div className="h-2.5 w-2.5 rounded-full bg-emerald-500"></div>
+            <Panel className="min-w-0">
+              <SectionHeader icon={Gauge} title="恢复方案" eyebrow="Dry Run" accent="orange" />
+              <PlanCard plan={plan} />
+            </Panel>
+
+            <Panel className="overflow-hidden p-0">
+              <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-5 py-4">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700">
+                    <TerminalSquare className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <h2 className="text-[15px] font-semibold text-slate-950">系统日志</h2>
+                    <p className="text-[12px] font-medium text-slate-500">Local operation stream</p>
+                  </div>
                 </div>
-                <div className="text-[11px] font-medium text-slate-400 tracking-wider">/VAR/LOG/SYSTEM.LOG</div>
+                <div className="hidden text-[11px] font-semibold uppercase text-slate-400 sm:block">system.log</div>
               </div>
-              <div className="h-full overflow-y-auto p-4 text-[12px] leading-relaxed z-10">
+              <div className="min-h-[320px] overflow-y-auto bg-slate-950 p-4 font-mono text-[12px] leading-relaxed">
                 {logs.map((item, i) => (
-                  <div key={i} className="flex gap-3 hover:bg-slate-800/50 px-2 py-0.5 rounded break-all">
-                    <span className="text-slate-500 shrink-0">[{item.time}]</span> 
+                  <div key={i} className="flex gap-3 rounded px-2 py-0.5 break-all hover:bg-white/[0.04]">
+                    <span className="shrink-0 text-slate-500">[{item.time}]</span> 
                     <span className={cx(item.text.includes('ERROR') ? 'text-rose-400' : item.text.includes('WARN') ? 'text-amber-400' : item.text.includes('OK') || item.text.includes('COMPLETE') ? 'text-emerald-400 font-medium' : 'text-slate-300')}>{item.text}</span>
                   </div>
                 ))}
-                <div className="flex gap-3 px-2 py-0.5 mt-1"><span className="text-slate-500">[{now()}]</span><span className="w-2 h-3.5 bg-slate-400 animate-pulse mt-1"></span></div>
+                <div className="mt-1 flex gap-3 px-2 py-0.5"><span className="text-slate-500">[{now()}]</span><span className="mt-1 h-3.5 w-2 animate-pulse bg-slate-400"></span></div>
               </div>
-            </div>
+            </Panel>
           </div>
-
         </div>
       </main>
     </div>

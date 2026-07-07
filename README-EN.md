@@ -4,7 +4,7 @@ A local recovery tool for restoring missing chat threads in the Codex desktop si
 
 ## Interface Screenshot
 
-![Codex History Recovery interface](docs/images/codex-recovery-console-v3.png)
+![Codex History Recovery interface](docs/images/codex-recovery-console-v4.png)
 
 ## Use Case
 
@@ -33,7 +33,8 @@ By default, the tool migrates only user-owned main chat threads. It does not mig
 - Local Node.js service for filesystem and state database operations
 - Built-in database access through project dependencies
 - Provider distribution scan
-- Latest user chat provider detection
+- Default Target Provider detection from the top-level `model_provider` in `config.toml`
+- Latest user chat provider kept as a verification or fallback reference
 - Manual target provider selection
 - Manual old provider selection
 - Optional subagent migration
@@ -102,11 +103,11 @@ If the port is already in use, the tool automatically tries the next port.
 3. Confirm the auto-filled `Codex root`. If it is wrong, click `Change` or `Detect root again`.
 4. Confirm that the status database indicator shows `已就绪`.
 5. Click the scan button.
-6. Review the provider distribution.
-7. Select or type the `Target Provider`.
-8. You may first create a new Codex chat that appears normally, then return to this tool and click the latest-chat button next to `Target Provider` to fill in that new chat's provider.
+6. The tool reads the top-level `model_provider` from `%USERPROFILE%\.codex\config.toml` and fills `Target Provider`.
+7. Review the provider distribution and confirm that `Target Provider` is correct.
+8. If you are unsure, click the latest-chat fill button to compare against the provider from the latest user chat that was actually written locally.
 9. Choose whether to migrate subagents.
-10. Select the old providers that should be replaced.
+10. Confirm the old providers that should be replaced. The tool selects providers other than the Target Provider by default.
 11. Click `Check plan`.
 12. If the plan looks correct, click `Start restore`.
 13. After verification passes, restart Codex desktop.
@@ -149,25 +150,37 @@ In that case, the old chats need to be synchronized from provider B to provider 
 
 The Target Provider is the provider you want restored old chats to use.
 
-The safest way to determine it:
+For normal Codex desktop users, this tool defaults to the top-level `model_provider` in:
 
-1. Create a new Codex chat that appears correctly in the sidebar.
-2. Send a very short test message so the new chat is definitely written to local state.
-3. Return to this tool and scan the Codex state.
-4. Click the latest-chat button next to `Target Provider`.
-5. The tool fills `Target Provider` with the `model_provider` from the latest user chat.
+```text
+%USERPROFILE%\.codex\config.toml
+```
 
-Creating an empty chat may also work, but it is less reliable than sending a message. The latest-chat button reads the latest user chat from `state_5.sqlite`; if Codex has not written the empty chat to the state database yet, or has not written its `model_provider`, the tool may skip that empty chat and read the previous user chat that already has a provider.
+For example:
 
-If you do not want to send a test message, you can try creating an empty chat first, confirm that it appears in the Codex sidebar, then click the scan button and the latest-chat button. If the button does not fill the expected value, send a short message in the new chat and scan again.
+```toml
+model_provider = "codex_local_access"
+```
 
-If you are signed in with a GPT/ChatGPT account, the Target Provider is usually `openai`. If you use a custom provider, API key, or local provider, enter the provider that is actually active for your setup. When restore starts, the tool syncs `config.toml` to that Target Provider.
+In that case, the tool treats the Target Provider as:
 
-You usually do not need to query it manually. The tool reads `state_5.sqlite` directly and can fill Target Provider from the latest user chat.
+```text
+codex_local_access
+```
 
-If `%USERPROFILE%\.codex\config.toml` still contains an old provider such as `cpa`, do not treat it as the current provider by itself. During restore, the tool syncs `model_provider` in `config.toml` to the Target Provider you confirmed.
+If you are signed in with a GPT/ChatGPT account and directly use that account's quota, the common provider is `openai`.
 
-Advanced users can still inspect the `threads` table in `state_5.sqlite` with any SQLite viewer. Look at the latest `thread_source='user'` rows. The `model_provider` from a newly visible working chat is the best Target Provider candidate.
+If you use Cockpit Tools, a local proxy, an API gateway, a custom provider, or another integration, the provider may not be `openai`. It may be the provider name referenced by `model_provider` in `config.toml`, such as `codex_local_access`, `cpa`, or `right_code`.
+
+This provider is the value written into Codex history metadata. It is not the model name and it is not the `base_url`.
+
+The latest-chat fill button is still available, but it is now a verification or fallback feature. It reads the provider from the latest user-owned chat actually written to `state_5.sqlite`; it is no longer the default Target Provider source.
+
+If `config.toml` has no top-level `model_provider`, the tool does not guess `openai` from ChatGPT sign-in state alone. It asks you to fill the Target Provider manually. You may also create a new visible Codex chat, send a short message, then use the latest-chat fill button as a reference.
+
+If you launch Codex with CLI overrides, profiles, a custom `CODEX_HOME`, or a special launcher, confirm the Target Provider against the actual launch environment.
+
+When restore starts, the tool syncs `config.toml` to the Target Provider you confirmed.
 
 ### What is Target Provider Injection?
 
@@ -203,7 +216,7 @@ If this is selected incorrectly, you may see:
 - A checked plan with 0 threads to restore and 0 JSONL files to update
 - Old chats still missing from the sidebar after restore
 
-When that happens, first confirm the `model_provider` from a new chat that appears correctly in the sidebar and use it as the Target Provider. Then select the provider that the old hidden chats originally used.
+When that happens, first confirm whether the top-level `model_provider` in `config.toml` is the provider currently in use. If you recently switched providers, use the latest-chat fill button to compare against the provider most recently written by Codex. Then confirm the provider that the old hidden chats originally used.
 
 ### What are subagents?
 
@@ -375,9 +388,9 @@ Check:
 
 ### Not sure which Target Provider to use
 
-Create a new Codex chat that appears in the sidebar, then return to this tool, scan the state, and click the latest-chat button next to `Target Provider`.
+Start with the top-level `model_provider` in `%USERPROFILE%\.codex\config.toml`. The tool reads and fills it automatically after scanning.
 
-If you are signed in with a GPT/ChatGPT account, the Target Provider is usually `openai`. If you use a custom provider, API key, or local provider, enter the provider that is actually active for your setup. When restore starts, the tool syncs `config.toml` to that Target Provider.
+If no top-level `model_provider` is detected, or if you recently switched providers, create a new Codex chat, send a short message, confirm that it appears in the sidebar, then use the latest-chat fill button as a comparison point.
 
 ## Development
 

@@ -112,6 +112,7 @@ function readConfigModelProvider(root) {
   if (!text.trim()) return '';
   for (const rawLine of text.split(/\r?\n/)) {
     if (/^\s*#/.test(rawLine)) continue;
+    if (/^\s*\[/.test(rawLine)) break;
     const line = rawLine.replace(/#.*/, '').trim();
     const match = line.match(/^model_provider\s*=\s*(['"])(.*?)\1\s*$/);
     if (match && match[2].trim()) return match[2].trim();
@@ -135,13 +136,25 @@ function updateConfigModelProvider(root, targetProvider) {
     let replaced = false;
     for (let i = 0; i < lines.length; i += 1) {
       if (/^\s*#/.test(lines[i])) continue;
+      if (/^\s*\[/.test(lines[i])) break;
       if (/^\s*model_provider\s*=/.test(lines[i])) {
         lines[i] = nextLine;
         replaced = true;
         break;
       }
     }
-    output = replaced ? lines.join(eol) : `${text}${/\r?\n$/.test(text) ? '' : eol}${nextLine}${eol}`;
+    if (replaced) {
+      output = lines.join(eol);
+    } else {
+      const tableIndex = lines.findIndex((line) => /^\s*\[/.test(line));
+      if (tableIndex >= 0) {
+        const insertAt = tableIndex > 0 && lines[tableIndex - 1].trim() === '' ? tableIndex - 1 : tableIndex;
+        lines.splice(insertAt, 0, nextLine, '');
+        output = lines.join(eol);
+      } else {
+        output = `${text}${/\r?\n$/.test(text) ? '' : eol}${nextLine}${eol}`;
+      }
+    }
   }
   if (output !== text) fs.writeFileSync(configPath, output, 'utf8');
   return { path: configPath, previous, current: provider, changed: output !== text };
@@ -503,7 +516,18 @@ order by model_provider, archived, thread_source;
 `);
     const providers = [...new Set(providerRows.map((row) => String(row.model_provider || '')).filter(Boolean))];
     const latestUser = latestRows[0] || null;
-    return { root, sqliteEngine: 'better-sqlite3', authMode, hasApiKey, latestUser, providerRows, providers, configModelProvider: readConfigModelProvider(root), suggestedTarget: authMode === 'chatgpt' ? 'openai' : String(latestUser?.model_provider || '') };
+    const configModelProvider = readConfigModelProvider(root);
+    return {
+      root,
+      sqliteEngine: 'better-sqlite3',
+      authMode,
+      hasApiKey,
+      latestUser,
+      providerRows,
+      providers,
+      configModelProvider,
+      suggestedTarget: configModelProvider || '',
+    };
   });
 }
 

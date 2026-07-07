@@ -5,6 +5,7 @@ export default {
       boxShadow: {
         'glass': '0 8px 32px 0 rgba(15, 23, 42, 0.04)',
         'glass-hover': '0 12px 48px 0 rgba(15, 23, 42, 0.08)',
+        'soft': '0 18px 48px -32px rgba(15, 23, 42, 0.28), 0 1px 3px rgba(15, 23, 42, 0.08)',
         'soft-xl': '0 20px 40px -15px rgba(0,0,0,0.05)',
         'inner-light': 'inset 0 2px 4px 0 rgba(255, 255, 255, 0.8)',
       },
