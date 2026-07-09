@@ -1,6 +1,6 @@
 {
   "name": "codex-history-recovery",
-  "version": "2.0.2",
+  "version": "2.0.3",
   "description": "Modern desktop UI for restoring Codex sidebar chat history.",
   "main": "electron/main.cjs",
   "type": "module",
