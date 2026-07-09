@@ -516,8 +516,8 @@ npm run dist:win
 也可以直接推送版本标签，让 GitHub Actions 在 Windows 环境中自动打包并发布到 GitHub Releases：
 
 ```powershell
-git tag v2.0.0
-git push origin v2.0.0
+git tag vX.Y.Z
+git push origin vX.Y.Z
 ```
 
 ## 项目结构

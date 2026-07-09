@@ -509,8 +509,8 @@ Build outputs are generated in the `release` directory. This directory is only f
 You can also push a version tag and let GitHub Actions build the Windows artifacts and publish them to GitHub Releases:
 
 ```powershell
-git tag v2.0.0
-git push origin v2.0.0
+git tag vX.Y.Z
+git push origin vX.Y.Z
 ```
 
 ## Project Structure
