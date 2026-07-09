@@ -9,7 +9,7 @@ const DIST = path.join(ROOT, 'dist');
 const THREAD_ID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 const BACKUP_DIR_RE = /^backup-\d{8}-\d{6}-.+/;
 const PROJECT_BACKUP_REASONS = new Set(['pre-chat-history-restore', 'pre-backup-restore']);
-const STATE_FILE_NAMES = ['state_5.sqlite', 'state_5.sqlite-wal', 'state_5.sqlite-shm', 'session_index.jsonl', '.codex-global-state.json', 'config.toml', 'config.toml.bak'];
+const STATE_FILE_NAMES = ['state_5.sqlite', 'state_5.sqlite-wal', 'state_5.sqlite-shm', 'session_index.jsonl', '.codex-global-state.json', 'config.toml', 'config.toml.bak', 'auth.json', 'auth.json.bak'];
 const RESTORABLE_DIR_NAMES = ['sessions', 'archived_sessions'];
 
 function stripExtendedPrefix(value) {
@@ -105,6 +105,63 @@ function firstJsonLine(file) {
 function readTextIfExists(file) {
   if (!fs.existsSync(file)) return '';
   return fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '');
+}
+
+function collectAuthSignals(value, signals = new Set(), depth = 0) {
+  if (!value || typeof value !== 'object' || depth > 4) return signals;
+  for (const [key, child] of Object.entries(value)) {
+    const lower = String(key).toLowerCase();
+    if (lower === 'openai_api_key') signals.add('api_key');
+    if (lower === 'auth_mode') signals.add('auth_mode');
+    if (lower.includes('oauth')) signals.add('oauth');
+    if (lower.includes('account') || lower === 'email' || lower === 'user') signals.add('account');
+    if (lower.includes('refresh') || lower.includes('access_token') || lower === 'id_token' || lower === 'tokens') signals.add('oauth_token');
+    collectAuthSignals(child, signals, depth + 1);
+  }
+  return signals;
+}
+
+function readAuthSummaryFromPath(authPath) {
+  const summary = {
+    path: authPath,
+    exists: fs.existsSync(authPath),
+    readable: false,
+    authMode: '',
+    hasApiKey: false,
+    likelyAccountAuth: false,
+    authType: 'missing',
+    signals: [],
+    error: '',
+  };
+  if (!summary.exists) return summary;
+  try {
+    const text = fs.readFileSync(authPath, 'utf8').replace(/^\uFEFF/, '');
+    const auth = text.trim() ? JSON.parse(text) : {};
+    const signals = collectAuthSignals(auth);
+    const mode = String(auth.auth_mode || auth.authMode || auth.mode || '').trim();
+    const lowerMode = mode.toLowerCase();
+    const apiKey = String(auth.OPENAI_API_KEY || auth.openai_api_key || '').trim();
+    summary.readable = true;
+    summary.authMode = mode;
+    summary.hasApiKey = Boolean(apiKey) || signals.has('api_key') || lowerMode === 'apikey';
+    summary.likelyAccountAuth = !summary.hasApiKey && (
+      /oauth|account|chatgpt|login|browser/i.test(mode)
+      || signals.has('oauth')
+      || signals.has('oauth_token')
+      || signals.has('account')
+    );
+    summary.authType = summary.hasApiKey ? 'api_key' : summary.likelyAccountAuth ? 'account' : 'unknown';
+    summary.signals = [...signals].sort();
+    return summary;
+  } catch (error) {
+    summary.authType = 'unreadable';
+    summary.error = error.message;
+    return summary;
+  }
+}
+
+function readAuthSummary(root) {
+  return readAuthSummaryFromPath(path.join(root, 'auth.json'));
 }
 
 function readConfigModelProvider(root) {
@@ -254,6 +311,7 @@ function listBackups({ root }) {
       try { manifest = readBackupManifest(backupPath); } catch {}
       if (!isProjectBackupManifest(manifest)) return null;
       const stat = fs.statSync(backupPath);
+      const auth = readAuthSummaryFromPath(path.join(backupPath, 'auth.json'));
       return {
         name: entry.name,
         path: backupPath,
@@ -261,6 +319,8 @@ function listBackups({ root }) {
         reason: manifest.reason || '',
         targetProvider: manifest.targetProvider || '',
         includeSubagents: Boolean(manifest.includeSubagents),
+        hasAuthJson: auth.exists,
+        auth,
         projectBackup: true,
       };
     })
@@ -325,6 +385,27 @@ function restoreFromBackup({ root, backupPath }) {
     safetyBackup: safety.backup,
     restored: restored.length,
     skipped,
+  };
+}
+
+function restoreAuthFromBackup({ root, backupPath }) {
+  if (!root || !fs.existsSync(root)) throw new Error(`Missing Codex root: ${root || '(empty)'}`);
+  const backup = resolveBackup(root, backupPath);
+  const src = path.join(backup.path, 'auth.json');
+  if (!fs.existsSync(src)) throw new Error('Selected backup does not contain auth.json.');
+  const previousAuth = readAuthSummary(root);
+  const restoredAuth = readAuthSummaryFromPath(src);
+  const safety = createCodexStateBackup(root, { reason: 'pre-backup-restore', includeSubagents: true });
+  const restored = [];
+  const skipped = [];
+  copyRestoredFile(src, path.join(root, 'auth.json'), restored, skipped);
+  return {
+    backup: backup.path,
+    safetyBackup: safety.backup,
+    restored: restored.length,
+    skipped,
+    previousAuth,
+    restoredAuth,
   };
 }
 
@@ -489,14 +570,7 @@ function getDefaults() {
 }
 
 function scanState({ root }) {
-  const authPath = path.join(root, 'auth.json');
-  let authMode = '';
-  let hasApiKey = false;
-  if (fs.existsSync(authPath)) {
-    const auth = JSON.parse(fs.readFileSync(authPath, 'utf8').replace(/^\uFEFF/, ''));
-    authMode = String(auth.auth_mode || '');
-    hasApiKey = Boolean(String(auth.OPENAI_API_KEY || '').trim());
-  }
+  const auth = readAuthSummary(root);
   return withDatabase(root, true, (db) => {
     const latestRows = queryRows(db, `
 select id, title, model_provider
@@ -520,8 +594,9 @@ order by model_provider, archived, thread_source;
     return {
       root,
       sqliteEngine: 'node:sqlite',
-      authMode,
-      hasApiKey,
+      auth,
+      authMode: auth.authMode,
+      hasApiKey: auth.hasApiKey,
       latestUser,
       providerRows,
       providers,
@@ -596,6 +671,7 @@ async function handleApi(req, res) {
     if (req.url === '/api/plan') return sendJson(res, 200, { ok: true, data: buildPlan(body) });
     if (req.url === '/api/apply') return sendJson(res, 200, { ok: true, data: applyRestore(body) });
     if (req.url === '/api/restore-backup') return sendJson(res, 200, { ok: true, data: restoreFromBackup(body) });
+    if (req.url === '/api/restore-auth-backup') return sendJson(res, 200, { ok: true, data: restoreAuthFromBackup(body) });
     if (req.url === '/api/delete-backup') return sendJson(res, 200, { ok: true, data: deleteBackup(body) });
     if (req.url === '/api/cleanup-backups') return sendJson(res, 200, { ok: true, data: cleanupExpiredBackups(body) });
     return sendJson(res, 404, { ok: false, error: { message: 'Not found' } });

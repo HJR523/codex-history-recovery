@@ -21,9 +21,13 @@
 
 这个工具会扫描 `.codex` 状态，生成恢复计划，自动备份关键文件，然后同步 SQLite、JSONL、`session_index.jsonl` 和 workspace hints。
 
+它也会检测并备份 `auth.json`。需要注意的是：provider 负责聊天记录归属和侧边栏显示，`auth.json` 负责 Codex 当前的认证状态。把聊天记录 provider 改成 `openai` 并不等于恢复 GPT/ChatGPT 账号登录态。
+
 ## 重要提醒
 
 这个工具会修改本机 Codex 状态文件。执行恢复前会自动备份，但仍建议先关闭或重启 Codex 桌面端，减少活动会话文件被占用。
+
+工具可以从已有备份恢复 `auth.json`，但不能生成、伪造或转换 GPT/ChatGPT 账号登录凭据。如果账号登录已经失效，请先在 Codex 中重新登录。
 
 默认只迁移用户主聊天，不迁移 subagents。
 
@@ -35,11 +39,14 @@
 - 扫描 provider 分布
 - 默认读取 `config.toml` 顶层 `model_provider` 作为 Target Provider
 - 保留最新用户聊天 provider 作为验证或兜底参考
+- 检测当前 `auth.json` 认证状态
 - 手动选择 target provider
 - 手动选择旧 provider
 - 可选择是否包含 subagents
 - 恢复前检查方案
 - 执行前自动备份
+- 自动备份 `auth.json`
+- 可从本工具备份单独恢复 `auth.json`
 - 执行后自动验证
 - 可打包为 Windows 安装包和便携版桌面应用
 - 保留 Windows 双击启动脚本
@@ -133,13 +140,14 @@ http://127.0.0.1:47321
 4. 确认界面显示 `状态数据库: 已就绪`。
 5. 点击 `深度扫描`。
 6. 工具会读取 `%USERPROFILE%\.codex\config.toml` 顶层 `model_provider`，并自动填入 `Target Provider`。
-7. 查看 provider 分布，确认 `Target Provider` 是否正确。
-8. 如果不确定，可以点击 `从最新聊天填入`，用最近一次实际写入的用户聊天 provider 进行对比或兜底。
-9. 选择是否迁移 subagents。
-10. 确认需要替换的旧 provider，工具会默认勾选 Target Provider 以外的 provider。
-11. 点击 `检查方案`。
-12. 确认方案无误后点击 `开始恢复`。
-13. 看到验证通过后，重启 Codex 桌面端。
+7. 查看 `认证状态`。如果你使用 GPT/ChatGPT 账号登录，Target Provider 通常是 `openai`，但认证状态不应该是 `API Key 模式`。
+8. 查看 provider 分布，确认 `Target Provider` 是否正确。
+9. 如果不确定，可以点击 `从最新聊天填入`，用最近一次实际写入的用户聊天 provider 进行对比或兜底。
+10. 选择是否迁移 subagents。
+11. 确认需要替换的旧 provider，工具会默认勾选 Target Provider 以外的 provider。
+12. 点击 `检查方案`。
+13. 确认方案无误后点击 `开始恢复`。
+14. 看到验证通过后，重启 Codex 桌面端。
 
 ## 核心概念
 
@@ -218,6 +226,25 @@ codex_local_access
 
 开始恢复时，工具会把 `config.toml` 同步为你最终确认的 Target Provider。
 
+### auth.json 与账号登录态
+
+`auth.json` 是 Codex 当前认证状态相关的本地文件。它和 Target Provider 是两件事：
+
+- Target Provider 决定旧聊天记录要迁移到哪个 provider 名称下
+- `auth.json` 决定 Codex 当前是否处于某种可用的认证状态
+
+如果你使用 GPT/ChatGPT 账号登录并直接使用账号额度，Target Provider 通常是 `openai`。但只有把聊天记录和 `config.toml` 改成 `openai`，并不一定能恢复账号登录态；如果当前 `auth.json` 仍是 API Key 模式，Codex 可能仍然无法按 GPT/ChatGPT 账号方式发消息。
+
+本工具会在 `深度扫描` 后显示 `认证状态`：
+
+- `API Key 模式`：当前更像 API Key 认证，不等于 GPT/ChatGPT 账号登录
+- `账号登录态可能存在`：检测到账号登录相关信号，但仍以 Codex 实际能否发消息为准
+- `未找到 auth.json`：当前 Codex root 下没有认证文件
+
+执行恢复前，工具会把当前 `auth.json` 一起备份。如果你之前有一个能正常使用 GPT/ChatGPT 账号登录的备份，可以在 `备份回滚` 区域选择该备份，点击 `恢复 auth.json`。这个操作只恢复认证文件，不迁移聊天记录。
+
+工具不能生成、伪造或转换 GPT/ChatGPT 账号登录凭据。如果没有可用备份，请先在 Codex 中重新登录账号，再回来恢复聊天记录。
+
 ### Target Provider Injection 是什么
 
 这里的 Target Provider Injection 指的是：把你确认过的 Target Provider 写入需要恢复的旧用户线程，使 SQLite 和 JSONL 元数据保持一致。
@@ -289,6 +316,7 @@ thread_source='user'
 %USERPROFILE%\.codex\session_index.jsonl
 %USERPROFILE%\.codex\.codex-global-state.json
 %USERPROFILE%\.codex\config.toml
+%USERPROFILE%\.codex\auth.json
 ```
 
 执行前会自动备份：
@@ -304,6 +332,7 @@ thread_source='user'
 - session index
 - global state
 - config
+- auth.json
 - sessions
 - archived sessions
 - manifest.json
@@ -320,6 +349,8 @@ thread_source='user'
 执行回滚前，工具会再自动备份一次当前状态。也就是说，即使选错了备份，仍然会留下一个新的安全备份用于再次回滚。
 
 建议在执行回滚前关闭或重启 Codex 桌面端，避免状态文件被占用。
+
+如果只想恢复认证状态，不想回滚聊天记录，可以选择含有 `auth.json` 的备份，然后点击 `恢复 auth.json`。这个操作只把备份里的 `auth.json` 写回 Codex root，不会改 SQLite、JSONL 或聊天记录。
 
 如果确认某个备份不再需要，可以在同一区域选择该备份并点击 `删除当前备份`。该操作只会删除下拉框当前选中的本项目备份文件夹，不会删除 `.codex` 主目录或聊天记录。
 
@@ -419,6 +450,16 @@ Codex History Recovery is running at http://127.0.0.1:47321
 - 是否只恢复了空 provider
 - 验证指标是否有非 0 项
 - 是否有 JSONL_LOCKED
+
+### Target Provider 是 openai，但仍然发不了消息
+
+先看界面的 `认证状态`。如果显示 `API Key 模式`、`未找到 auth.json` 或 `未知认证模式`，说明聊天记录可以迁移到 `openai`，但当前 Codex 不一定拥有 GPT/ChatGPT 账号登录态。
+
+可选处理方式：
+
+- 先在 Codex 中重新登录 GPT/ChatGPT 账号，再运行本工具恢复聊天记录
+- 如果本工具备份里有曾经可用的账号登录态，选择该备份并点击 `恢复 auth.json`
+- 如果你本来就使用 API Key 或自定义 provider，不要盲目把 Target Provider 改成 `openai`，应使用当前实际可发消息的 provider
 
 ### 不确定 Target Provider 怎么选
 

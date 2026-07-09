@@ -33,6 +33,7 @@ const browserApi = {
   plan: (payload) => postJson('/api/plan', payload),
   apply: (payload) => postJson('/api/apply', payload),
   restoreBackup: (payload) => postJson('/api/restore-backup', payload),
+  restoreAuthBackup: (payload) => postJson('/api/restore-auth-backup', payload),
   deleteBackup: (payload) => postJson('/api/delete-backup', payload),
   cleanupBackups: (payload) => postJson('/api/cleanup-backups', payload),
 };
@@ -51,6 +52,73 @@ function cx(...parts) {
 function joinDisplayPath(base, file) {
   const cleanBase = String(base || '').replace(/[\\/]+$/, '');
   return cleanBase ? `${cleanBase}\\${file}` : file;
+}
+
+function authStatusMeta(auth) {
+  if (!auth) {
+    return {
+      label: '待扫描',
+      tone: 'slate',
+      description: '扫描后读取当前 auth.json，不显示密钥内容。',
+    };
+  }
+  if (!auth.exists) {
+    return {
+      label: '未找到 auth.json',
+      tone: 'amber',
+      description: '当前目录没有认证文件。恢复聊天记录不会自动生成登录态。',
+    };
+  }
+  if (!auth.readable) {
+    return {
+      label: '无法读取 auth.json',
+      tone: 'red',
+      description: auth.error || '认证文件存在，但无法解析。',
+    };
+  }
+  if (auth.authType === 'api_key') {
+    return {
+      label: 'API Key 模式',
+      tone: 'amber',
+      description: '当前认证更像 API Key 模式，不等于 GPT/ChatGPT 账号登录。',
+    };
+  }
+  if (auth.authType === 'account') {
+    return {
+      label: '账号登录态可能存在',
+      tone: 'green',
+      description: '检测到账号登录相关信号。工具只展示摘要，不显示 token。',
+    };
+  }
+  return {
+    label: auth.authMode ? `未知模式 (${auth.authMode})` : '未知认证模式',
+    tone: 'amber',
+    description: '工具无法确定它是不是 GPT/ChatGPT 账号登录态，请以 Codex 实际能否发消息为准。',
+  };
+}
+
+function authToneClass(tone) {
+  const tones = {
+    slate: 'border-slate-200 bg-slate-50 text-slate-700',
+    green: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+    amber: 'border-amber-200 bg-amber-50 text-amber-800',
+    red: 'border-rose-200 bg-rose-50 text-rose-700',
+  };
+  return tones[tone] || tones.slate;
+}
+
+function authWarningForTarget(targetProvider, auth) {
+  if (String(targetProvider || '').trim().toLowerCase() !== 'openai' || !auth) return '';
+  if (!auth.exists) {
+    return 'Target Provider 是 openai，但当前目录没有 auth.json；这不会恢复 GPT/ChatGPT 账号登录，可能仍然无法发送消息。请先在 Codex 中重新登录账号，或从含账号登录态的备份恢复 auth.json。';
+  }
+  if (auth.authType === 'api_key') {
+    return 'Target Provider 是 openai，但当前 auth.json 是 API Key 模式；这不会恢复 GPT/ChatGPT 账号登录，可能仍然无法发送消息。请先在 Codex 中重新登录账号，或从含账号登录态的备份恢复 auth.json。';
+  }
+  if (auth.authType === 'unknown' || auth.authType === 'unreadable') {
+    return 'Target Provider 是 openai，但工具无法确认当前 auth.json 是否为 GPT/ChatGPT 账号登录态。恢复聊天记录可以继续，但登录态需要以 Codex 实际能否发消息为准。';
+  }
+  return '';
 }
 
 const panelClass = 'rounded-lg border border-white/80 bg-white/[0.88] p-5 shadow-soft ring-1 ring-slate-950/[0.03] backdrop-blur-xl sm:p-6';
@@ -296,6 +364,11 @@ function App() {
   const stateDbReady = Boolean(defaultsInfo?.root === root && defaultsInfo.rootExists);
   const stateDbStatus = stateDbReady ? '已就绪' : root ? '待确认' : '未就绪';
   const configTomlPath = root ? joinDisplayPath(root, 'config.toml') : '当前 Codex root\\config.toml';
+  const authInfo = scan?.auth ?? null;
+  const authMeta = authStatusMeta(authInfo);
+  const authPath = root ? joinDisplayPath(root, 'auth.json') : '当前 Codex root\\auth.json';
+  const selectedBackupAuthMeta = authStatusMeta(selectedBackupInfo?.auth ?? null);
+  const openAiAuthWarning = authWarningForTarget(target, authInfo);
 
   const payload = useMemo(
     () => ({
@@ -423,6 +496,7 @@ function App() {
     resetPlan();
     setStatus({ tone: configTarget ? 'good' : 'warn', text: configTarget ? '扫描完成，已读取 config provider' : '扫描完成，请手动填写 Target Provider' });
     log(`Found providers: ${data.providers.join(', ') || '(none)'}`);
+    log(`Auth status: ${authStatusMeta(data.auth).label}`);
     if (configTarget) {
       log(`Target Provider loaded from config.toml: ${configTarget}`);
       log(`Auto-selected old providers: ${(data.providers || []).filter((provider) => provider !== configTarget).join(', ') || '(none)'}`);
@@ -431,6 +505,11 @@ function App() {
     }
     if (configTarget && data.latestUser?.model_provider && configTarget !== data.latestUser.model_provider) {
       log(`[WARN] config.toml 检测到 ${configTarget}，但最新聊天写入的是 ${data.latestUser.model_provider}。如果你最近切换过 provider，请确认要恢复到哪一个。`);
+    }
+    const authWarning = authWarningForTarget(configTarget, data.auth);
+    if (authWarning) {
+      setStatus({ tone: 'warn', text: '请确认 openai 认证状态' });
+      log(`[WARN] ${authWarning}`);
     }
     refreshBackups(data.root || root, false);
   }
@@ -514,6 +593,8 @@ function App() {
         return;
       }
     }
+    const authWarning = authWarningForTarget(targetProvider, scan?.auth);
+    if (authWarning) log(`[WARN] ${authWarning}`);
     const data = await call('plan', () => api.plan(payload));
     if (!data) return;
     setPlan(data);
@@ -539,7 +620,9 @@ function App() {
     const configSync = scan?.configModelProvider && scan.configModelProvider !== targetProvider
       ? `\n配置文件将同步: ${scan.configModelProvider} -> ${targetProvider}`
       : '';
-    const yes = window.confirm(`确认开始恢复？\n\n执行前会自动备份 Codex 状态。\nTarget Provider: ${targetProvider}\n需处理线程: ${plan.threadsToMigrate}\n需更新 JSONL: ${plan.jsonlToChange}${configSync}`);
+    const authWarning = authWarningForTarget(targetProvider, scan?.auth);
+    const authNotice = authWarning ? `\n\n认证提醒：${authWarning}` : '';
+    const yes = window.confirm(`确认开始恢复？\n\n执行前会自动备份 Codex 状态。\nTarget Provider: ${targetProvider}\n需处理线程: ${plan.threadsToMigrate}\n需更新 JSONL: ${plan.jsonlToChange}${configSync}${authNotice}`);
     if (!yes) return;
     setStatus({ tone: 'info', text: '正在写入恢复数据...' });
     const data = await call('apply', () => api.apply(payload));
@@ -570,6 +653,31 @@ function App() {
     log(`Backup restored: ${data.backup}`);
     log(`Safety backup created: ${data.safetyBackup}`);
     log(`Restore complete: files=${data.restored}, skipped=${data.skipped?.length || 0}`);
+    refreshBackups(root, false);
+  }
+
+  async function handleRestoreAuthBackup() {
+    if (!selectedBackup) {
+      warn('请先选择一个备份');
+      return;
+    }
+    if (!selectedBackupInfo?.hasAuthJson) {
+      warn('所选备份不包含 auth.json，无法恢复认证文件');
+      return;
+    }
+    const label = selectedBackupInfo?.name || selectedBackup;
+    const authLabel = authStatusMeta(selectedBackupInfo?.auth).label;
+    const yes = window.confirm(`确认从这个备份恢复 auth.json？\n\n${label}\n备份认证状态：${authLabel}\n\n这只恢复认证文件，不迁移聊天记录。工具会先备份当前状态，然后把所选备份里的 auth.json 写回 Codex root。它不会生成或伪造 GPT/ChatGPT 账号登录态。`);
+    if (!yes) return;
+    setStatus({ tone: 'info', text: '正在恢复 auth.json...' });
+    const data = await call('restore-auth-backup', () => api.restoreAuthBackup({ root, backupPath: selectedBackup }));
+    if (!data) return;
+    setScan(null);
+    resetPlan();
+    setStatus({ tone: data.skipped?.length ? 'warn' : 'good', text: data.skipped?.length ? 'auth.json 已恢复，有文件跳过' : 'auth.json 已恢复' });
+    log(`Auth restored from backup: ${data.backup}`);
+    log(`Safety backup created: ${data.safetyBackup}`);
+    log(`Auth change: ${authStatusMeta(data.previousAuth).label} -> ${authStatusMeta(data.restoredAuth).label}`);
     refreshBackups(root, false);
   }
 
@@ -689,6 +797,15 @@ function App() {
                     <span className={cx('rounded-full border bg-white/75 px-2.5 py-0.5 text-[11px]', stateDbReady ? 'border-emerald-200 text-emerald-700' : 'border-amber-200 text-amber-800')}>{stateDbStatus}</span>
                   </div>
                 </div>
+                <div className={cx('rounded-lg border px-4 py-3 text-[12px]', authToneClass(authMeta.tone))}>
+                  <div className="flex items-center justify-between gap-3 font-semibold">
+                    <span>认证状态</span>
+                    <span className="shrink-0 rounded-full border border-current/20 bg-white/75 px-2.5 py-0.5 text-[11px]">{authMeta.label}</span>
+                  </div>
+                  <p className="mt-2 break-all text-[12px] font-medium leading-5 opacity-80">
+                    {scan ? authMeta.description : `扫描后读取 ${authPath}`}
+                  </p>
+                </div>
                 <div className="flex gap-3 pt-2">
                   <Button onClick={handleScan} tone="primary" busy={busy === 'scan'} className="flex-1">深度扫描</Button>
                 </div>
@@ -716,6 +833,12 @@ function App() {
                       </span>
                     )}
                   </div>
+                  {openAiAuthWarning && (
+                    <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] font-medium leading-5 text-amber-900">
+                      <span className="font-semibold">认证提醒：</span>
+                      {openAiAuthWarning}
+                    </div>
+                  )}
                 </Field>
 
                 <Field label="Include Subagents (包含子代理)">
@@ -778,19 +901,33 @@ function App() {
                         <span className="font-semibold text-slate-700">目标 Provider</span>
                         <span className="max-w-[220px] truncate font-mono text-slate-800">{selectedBackupInfo.targetProvider || '-'}</span>
                       </div>
+                      <div className="flex justify-between gap-3">
+                        <span className="font-semibold text-slate-700">认证文件</span>
+                        <span className={cx('max-w-[220px] truncate rounded-full border px-2 py-0.5 text-[11px] font-semibold', selectedBackupInfo.hasAuthJson ? authToneClass(selectedBackupAuthMeta.tone) : 'border-slate-200 bg-white text-slate-500')}>
+                          {selectedBackupInfo.hasAuthJson ? selectedBackupAuthMeta.label : '不包含 auth.json'}
+                        </span>
+                      </div>
                     </div>
                   ) : (
                     <span className="font-medium text-slate-400">选择备份后显示详情</span>
                   )}
                 </div>
 
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                   <Button tone="danger" disabled={!selectedBackup} busy={busy === 'delete-backup'} onClick={handleDeleteBackup}>
                     删除当前备份
+                  </Button>
+                  <Button tone="soft" disabled={!selectedBackup || !selectedBackupInfo?.hasAuthJson} busy={busy === 'restore-auth-backup'} onClick={handleRestoreAuthBackup}>
+                    恢复 auth.json
                   </Button>
                   <Button tone="accent" disabled={!selectedBackup} busy={busy === 'restore-backup'} onClick={handleRestoreBackup}>
                     恢复此备份
                   </Button>
+                </div>
+
+                <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-[12px] leading-5 text-blue-900">
+                  <span className="font-semibold">说明：</span>
+                  `恢复 auth.json` 只恢复认证文件，不迁移聊天记录；适合聊天记录 provider 已恢复，但登录态仍不对的情况。
                 </div>
 
                 <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">

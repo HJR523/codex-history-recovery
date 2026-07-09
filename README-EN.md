@@ -21,9 +21,13 @@ After switching authentication modes, switching providers, upgrading Codex, or h
 
 This tool scans your `.codex` state, builds a restore plan, creates a backup, then synchronizes SQLite rows, JSONL session metadata, `session_index.jsonl`, and workspace root hints.
 
+It also detects and backs up `auth.json`. Provider metadata controls which sidebar bucket a chat belongs to. `auth.json` controls the current Codex authentication state. Changing chat provider metadata to `openai` does not by itself restore GPT/ChatGPT account sign-in.
+
 ## Important Warning
 
 This tool modifies local Codex state files. It creates a backup before writing, but you should still close or restart Codex desktop first to reduce the chance of active JSONL files being locked.
+
+The tool can restore an existing `auth.json` from a previous backup, but it cannot generate, fake, or convert GPT/ChatGPT account credentials. If account sign-in has expired, sign in again through Codex first.
 
 By default, the tool migrates only user-owned main chat threads. It does not migrate subagents unless you explicitly choose to include them.
 
@@ -35,11 +39,14 @@ By default, the tool migrates only user-owned main chat threads. It does not mig
 - Provider distribution scan
 - Default Target Provider detection from the top-level `model_provider` in `config.toml`
 - Latest user chat provider kept as a verification or fallback reference
+- Current `auth.json` authentication-state detection
 - Manual target provider selection
 - Manual old provider selection
 - Optional subagent migration
 - Restore plan check before writing
 - Automatic pre-restore backup
+- Automatic `auth.json` backup
+- Auth-only `auth.json` restore from project backups
 - Automatic post-restore verification
 - Can be packaged as a Windows installer and portable desktop app
 - Windows double-click launcher
@@ -133,13 +140,14 @@ If the port is already in use, the tool automatically tries the next port.
 4. Confirm that the status database indicator shows `已就绪`.
 5. Click the scan button.
 6. The tool reads the top-level `model_provider` from `%USERPROFILE%\.codex\config.toml` and fills `Target Provider`.
-7. Review the provider distribution and confirm that `Target Provider` is correct.
-8. If you are unsure, click the latest-chat fill button to compare against the provider from the latest user chat that was actually written locally.
-9. Choose whether to migrate subagents.
-10. Confirm the old providers that should be replaced. The tool selects providers other than the Target Provider by default.
-11. Click `Check plan`.
-12. If the plan looks correct, click `Start restore`.
-13. After verification passes, restart Codex desktop.
+7. Review `Auth Status`. If you use a GPT/ChatGPT account, the Target Provider is usually `openai`, but the auth status should not be `API Key mode`.
+8. Review the provider distribution and confirm that `Target Provider` is correct.
+9. If you are unsure, click the latest-chat fill button to compare against the provider from the latest user chat that was actually written locally.
+10. Choose whether to migrate subagents.
+11. Confirm the old providers that should be replaced. The tool selects providers other than the Target Provider by default.
+12. Click `Check plan`.
+13. If the plan looks correct, click `Start restore`.
+14. After verification passes, restart Codex desktop.
 
 ## Core Concepts
 
@@ -210,6 +218,25 @@ If `config.toml` has no top-level `model_provider`, the tool does not guess `ope
 If you launch Codex with CLI overrides, profiles, a custom `CODEX_HOME`, or a special launcher, confirm the Target Provider against the actual launch environment.
 
 When restore starts, the tool syncs `config.toml` to the Target Provider you confirmed.
+
+### auth.json and account sign-in
+
+`auth.json` is the local file related to the current Codex authentication state. It is separate from the Target Provider:
+
+- Target Provider decides which provider name old chat records should be migrated to
+- `auth.json` decides whether Codex currently has a usable authentication state
+
+If you are signed in with a GPT/ChatGPT account and directly use that account's quota, the Target Provider is usually `openai`. However, changing chat records and `config.toml` to `openai` does not necessarily restore account sign-in. If the current `auth.json` is still in API Key mode, Codex may still be unable to send messages through a GPT/ChatGPT account session.
+
+After scanning, the tool shows `Auth Status`:
+
+- `API Key mode`: the current auth looks like API Key auth, not GPT/ChatGPT account sign-in
+- `Account sign-in likely exists`: account-login signals were detected, but the final check is whether Codex can actually send messages
+- `auth.json not found`: no auth file was found under the selected Codex root
+
+Before writing recovery changes, the tool backs up the current `auth.json`. If you have a previous backup from a time when GPT/ChatGPT account sign-in worked, select that backup in `Backup Rollback` and click `Restore auth.json`. This restores only the auth file and does not migrate chat records.
+
+The tool cannot generate, fake, or convert GPT/ChatGPT account credentials. If there is no usable backup, sign in again through Codex first, then restore chat history.
 
 ### What is Target Provider Injection?
 
@@ -282,6 +309,7 @@ During restore, the tool may modify:
 %USERPROFILE%\.codex\session_index.jsonl
 %USERPROFILE%\.codex\.codex-global-state.json
 %USERPROFILE%\.codex\config.toml
+%USERPROFILE%\.codex\auth.json
 ```
 
 Before writing, it creates a backup folder:
@@ -297,6 +325,7 @@ The backup includes:
 - session index
 - global state
 - config
+- auth.json
 - sessions
 - archived sessions
 - manifest.json
@@ -313,6 +342,8 @@ If the result is not what you expected, you can restore one of the automatic bac
 Before rolling back, the tool automatically creates another backup of the current state. If you pick the wrong backup, you still have a new safety backup to roll back to.
 
 It is recommended to close or restart Codex desktop before rolling back, so state files are less likely to be locked.
+
+If you only want to restore authentication state without rolling back chat records, select a backup that contains `auth.json` and click `Restore auth.json`. This writes only the backup's `auth.json` back to the Codex root. It does not change SQLite, JSONL, or chat records.
 
 If you no longer need one specific backup, select it in the same area and click `Delete Current Backup`. This only removes the currently selected project backup folder. It does not delete the `.codex` root folder or chat records.
 
@@ -412,6 +443,16 @@ Check:
 - Did you only restore empty provider rows?
 - Are any verification metrics non-zero?
 - Is `JSONL_LOCKED` greater than 0?
+
+### Target Provider is openai, but messages still cannot be sent
+
+Check `Auth Status` in the UI first. If it says `API Key mode`, `auth.json not found`, or an unknown auth mode, your chat records may have been migrated to `openai`, but the current Codex state may still not have GPT/ChatGPT account sign-in.
+
+Possible fixes:
+
+- Sign in to your GPT/ChatGPT account in Codex first, then run this tool to restore chats
+- If a project backup contains a previously working account sign-in state, select it and click `Restore auth.json`
+- If you actually use API Key auth or a custom provider, do not blindly change the Target Provider to `openai`; use the provider that can currently send messages
 
 ### Not sure which Target Provider to use
 
