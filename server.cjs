@@ -8,7 +8,7 @@ const ROOT = __dirname;
 const DIST = path.join(ROOT, 'dist');
 const THREAD_ID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 const BACKUP_DIR_RE = /^backup-\d{8}-\d{6}-.+/;
-const PROJECT_BACKUP_REASONS = new Set(['pre-chat-history-restore', 'pre-backup-restore']);
+const PROJECT_BACKUP_REASONS = new Set(['pre-chat-history-restore', 'pre-backup-restore', 'pre-settings-rollback']);
 const STATE_FILE_NAMES = ['state_5.sqlite', 'state_5.sqlite-wal', 'state_5.sqlite-shm', 'session_index.jsonl', '.codex-global-state.json', 'config.toml', 'config.toml.bak', 'auth.json', 'auth.json.bak'];
 const RESTORABLE_DIR_NAMES = ['sessions', 'archived_sessions'];
 
@@ -217,6 +217,28 @@ function updateConfigModelProvider(root, targetProvider) {
   return { path: configPath, previous, current: provider, changed: output !== text };
 }
 
+function removeConfigModelProvider(root) {
+  const configPath = path.join(root, 'config.toml');
+  const previous = readConfigModelProvider(root);
+  const text = readTextIfExists(configPath);
+  if (!text) return { path: configPath, previous, current: '', changed: false };
+  const eol = text.includes('\r\n') ? '\r\n' : '\n';
+  const lines = text.split(/\r?\n/);
+  let removed = false;
+  for (let i = 0; i < lines.length; i += 1) {
+    if (/^\s*#/.test(lines[i])) continue;
+    if (/^\s*\[/.test(lines[i])) break;
+    if (/^\s*model_provider\s*=/.test(lines[i])) {
+      lines.splice(i, 1);
+      removed = true;
+      break;
+    }
+  }
+  const output = lines.join(eol);
+  if (removed && output !== text) fs.writeFileSync(configPath, output, 'utf8');
+  return { path: configPath, previous, current: '', changed: removed && output !== text };
+}
+
 function resolveThreadId(meta, file) {
   let id = meta?.payload?.id ? String(meta.payload.id) : '';
   if (!id) {
@@ -350,42 +372,144 @@ function copyRestoredFile(src, dest, restored, skipped) {
   }
 }
 
-function copyRestoredTree(srcDir, destDir, restored, skipped) {
-  if (!fs.existsSync(srcDir)) return;
-  for (const src of walkFiles(srcDir)) {
-    copyRestoredFile(src, path.join(destDir, path.relative(srcDir, src)), restored, skipped);
-  }
+function getThreadColumns(db) {
+  return new Set(queryRows(db, 'pragma table_info(threads);').map((row) => String(row.name)));
 }
 
-function restoreFromBackup({ root, backupPath }) {
-  if (!root || !fs.existsSync(root)) throw new Error(`Missing Codex root: ${root || '(empty)'}`);
-  const backup = resolveBackup(root, backupPath);
-  const safety = createCodexStateBackup(root, { reason: 'pre-backup-restore', includeSubagents: true });
-  const restored = [];
+function readThreadSettings(db) {
+  const columns = getThreadColumns(db);
+  const fields = ['model_provider', 'thread_source', 'archived'].filter((name) => columns.has(name));
+  if (!columns.has('id')) throw new Error('threads table does not contain id column.');
+  const selectFields = ['id', ...fields].join(', ');
+  return {
+    fields,
+    rows: queryRows(db, `select ${selectFields} from threads where id is not null and id <> '';`),
+  };
+}
+
+function normalizeDbValue(value) {
+  return value === undefined ? null : value;
+}
+
+function restoreThreadSettingsFromBackup(currentDb, backupDb) {
+  const current = readThreadSettings(currentDb);
+  const backup = readThreadSettings(backupDb);
+  const fields = backup.fields.filter((field) => current.fields.includes(field));
+  if (!fields.length) return { matched: 0, changed: 0, fields, missing: backup.rows.length };
+
+  const currentById = new Map(current.rows.map((row) => [String(row.id), row]));
+  const update = currentDb.prepare(`update threads set ${fields.map((field) => `${field}=?`).join(', ')} where id=?;`);
+  let matched = 0;
+  let changed = 0;
+  let missing = 0;
+
+  runImmediateTransaction(currentDb, () => {
+    for (const source of backup.rows) {
+      const id = String(source.id);
+      const target = currentById.get(id);
+      if (!target) {
+        missing += 1;
+        continue;
+      }
+      matched += 1;
+      const differs = fields.some((field) => normalizeDbValue(target[field]) !== normalizeDbValue(source[field]));
+      if (!differs) continue;
+      update.run(...fields.map((field) => normalizeDbValue(source[field])), id);
+      changed += 1;
+    }
+  });
+
+  return { matched, changed, fields, missing };
+}
+
+function updateJsonlProvidersFromBackup(root, backupDb) {
+  const backupSettings = readThreadSettings(backupDb);
+  if (!backupSettings.fields.includes('model_provider')) {
+    return { matched: 0, changed: [], skipped: [{ path: 'threads.model_provider', reason: 'Backup threads table does not contain model_provider column.' }] };
+  }
+  const providerById = new Map();
+  for (const row of backupSettings.rows) {
+    providerById.set(String(row.id), normalizeDbValue(row.model_provider));
+  }
+
+  const changed = [];
   const skipped = [];
-  for (const name of STATE_FILE_NAMES) {
-    const src = path.join(backup.path, name);
-    const dest = path.join(root, name);
-    if (fs.existsSync(src)) {
-      copyRestoredFile(src, dest, restored, skipped);
-    } else if ((name === 'state_5.sqlite-wal' || name === 'state_5.sqlite-shm') && fs.existsSync(dest)) {
+  let matched = 0;
+
+  for (const dir of [path.join(root, 'sessions'), path.join(root, 'archived_sessions')]) {
+    for (const file of walkFiles(dir, (full) => path.basename(full).startsWith('rollout-') && full.endsWith('.jsonl'))) {
       try {
-        fs.rmSync(dest, { force: true });
-        restored.push(dest);
+        const text = fs.readFileSync(file, 'utf8');
+        const hadFinalNewline = /\r?\n$/.test(text);
+        const lines = text.split(/\r?\n/);
+        if (!lines[0]) continue;
+        const meta = JSON.parse(lines[0].replace(/^\uFEFF/, ''));
+        if (meta.type !== 'session_meta' || !meta.payload) continue;
+        const id = resolveThreadId(meta, file);
+        if (!providerById.has(id)) continue;
+        matched += 1;
+        const nextProvider = providerById.get(id);
+        if (normalizeDbValue(meta.payload.model_provider) === nextProvider) continue;
+        meta.payload.model_provider = nextProvider;
+        lines[0] = JSON.stringify(meta);
+        let output = lines.join('\n');
+        if (hadFinalNewline && !output.endsWith('\n')) output += '\n';
+        fs.writeFileSync(file, output, 'utf8');
+        changed.push(file);
       } catch (error) {
-        skipped.push({ path: dest, reason: error.message });
+        skipped.push({ path: file, reason: error.message });
       }
     }
   }
-  for (const dirName of RESTORABLE_DIR_NAMES) {
-    copyRestoredTree(path.join(backup.path, 'files', dirName), path.join(root, dirName), restored, skipped);
+
+  return { matched, changed, skipped };
+}
+
+function restoreConfigProviderFromBackup(root, backupRoot) {
+  const backupConfigPath = path.join(backupRoot, 'config.toml');
+  if (!fs.existsSync(backupConfigPath)) {
+    return { path: path.join(root, 'config.toml'), previous: readConfigModelProvider(root), current: readConfigModelProvider(root), changed: false, skipped: 'Backup does not contain config.toml.' };
   }
-  return {
-    backup: backup.path,
-    safetyBackup: safety.backup,
-    restored: restored.length,
-    skipped,
-  };
+  const backupProvider = readConfigModelProvider(backupRoot);
+  if (backupProvider) return updateConfigModelProvider(root, backupProvider);
+  return removeConfigModelProvider(root);
+}
+
+function restoreSettingsFromBackup({ root, backupPath }) {
+  if (!root || !fs.existsSync(root)) throw new Error(`Missing Codex root: ${root || '(empty)'}`);
+  const backup = resolveBackup(root, backupPath);
+  const backupDbPath = path.join(backup.path, 'state_5.sqlite');
+  if (!fs.existsSync(backupDbPath)) throw new Error('Selected backup does not contain state_5.sqlite.');
+  const safety = createCodexStateBackup(root, { reason: 'pre-settings-rollback', includeSubagents: true });
+  const backupDb = openDatabase(backupDbPath, true);
+  try {
+    return withDatabase(root, false, (db) => {
+      const threads = restoreThreadSettingsFromBackup(db, backupDb);
+      checkpoint(db);
+      const jsonl = updateJsonlProvidersFromBackup(root, backupDb);
+      const indexLines = rebuildSessionIndex(db, root);
+      const workspaceHintsAdded = updateWorkspaceHints(db, root);
+      const config = restoreConfigProviderFromBackup(root, backup.path);
+      const verify = verifyRestore(db, root);
+      const passed = verify.INDEX_BAD === 0 && verify.null_thread_source === 0 && verify.USER_THREADS_MISSING_HINT === 0 && verify.JSONL_USER_MISMATCH === 0 && verify.JSONL_BAD === 0;
+      return {
+        backup: backup.path,
+        safetyBackup: safety.backup,
+        mode: 'settings-only',
+        threads,
+        jsonlMatched: jsonl.matched,
+        jsonlChanged: jsonl.changed.length,
+        jsonlSkipped: jsonl.skipped,
+        indexLines,
+        workspaceHintsAdded,
+        config,
+        verify,
+        passed,
+      };
+    });
+  } finally {
+    backupDb.close();
+  }
 }
 
 function restoreAuthFromBackup({ root, backupPath }) {
@@ -670,7 +794,7 @@ async function handleApi(req, res) {
     if (req.url === '/api/scan') return sendJson(res, 200, { ok: true, data: scanState(body) });
     if (req.url === '/api/plan') return sendJson(res, 200, { ok: true, data: buildPlan(body) });
     if (req.url === '/api/apply') return sendJson(res, 200, { ok: true, data: applyRestore(body) });
-    if (req.url === '/api/restore-backup') return sendJson(res, 200, { ok: true, data: restoreFromBackup(body) });
+    if (req.url === '/api/restore-backup') return sendJson(res, 200, { ok: true, data: restoreSettingsFromBackup(body) });
     if (req.url === '/api/restore-auth-backup') return sendJson(res, 200, { ok: true, data: restoreAuthFromBackup(body) });
     if (req.url === '/api/delete-backup') return sendJson(res, 200, { ok: true, data: deleteBackup(body) });
     if (req.url === '/api/cleanup-backups') return sendJson(res, 200, { ok: true, data: cleanupExpiredBackups(body) });

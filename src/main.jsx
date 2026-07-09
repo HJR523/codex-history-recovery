@@ -642,17 +642,18 @@ function App() {
       return;
     }
     const label = selectedBackupInfo?.name || selectedBackup;
-    const yes = window.confirm(`确认从这个备份恢复？\n\n${label}\n\n工具会先备份当前状态，然后把所选备份写回 Codex 状态目录。建议先关闭或重启 Codex 桌面端，避免文件被占用。`);
+    const yes = window.confirm(`确认回滚恢复设置？\n\n${label}\n\n工具会先备份当前状态，然后从所选备份读取 provider、thread_source、归档状态和 config provider，并写回当前 Codex 状态。\n\n不会覆盖聊天正文，不会把 rollout JSONL 整个恢复到旧版本，也不会删除备份之后新增的聊天内容。\n\nauth.json 请使用单独的“恢复 auth.json”按钮。建议先关闭或重启 Codex 桌面端，避免文件被占用。`);
     if (!yes) return;
-    setStatus({ tone: 'info', text: '正在恢复备份...' });
+    setStatus({ tone: 'info', text: '正在回滚恢复设置...' });
     const data = await call('restore-backup', () => api.restoreBackup({ root, backupPath: selectedBackup }));
     if (!data) return;
     setScan(null);
     resetPlan();
-    setStatus({ tone: data.skipped?.length ? 'warn' : 'good', text: data.skipped?.length ? '备份已恢复，有文件跳过' : '备份已恢复' });
-    log(`Backup restored: ${data.backup}`);
+    setStatus({ tone: data.passed ? 'good' : 'warn', text: data.passed ? '恢复设置已回滚' : '恢复设置已回滚，有警告' });
+    log(`Restore settings rolled back from backup: ${data.backup}`);
     log(`Safety backup created: ${data.safetyBackup}`);
-    log(`Restore complete: files=${data.restored}, skipped=${data.skipped?.length || 0}`);
+    log(`Settings rollback complete: threads=${data.threads?.changed || 0}/${data.threads?.matched || 0}, JSONL first lines=${data.jsonlChanged || 0}/${data.jsonlMatched || 0}, skipped=${data.jsonlSkipped?.length || 0}`);
+    if (data.config?.changed) log(`Config provider restored: ${data.config.previous || '(empty)'} -> ${data.config.current || '(empty)'}`);
     refreshBackups(root, false);
   }
 
@@ -921,13 +922,13 @@ function App() {
                     恢复 auth.json
                   </Button>
                   <Button tone="accent" disabled={!selectedBackup} busy={busy === 'restore-backup'} onClick={handleRestoreBackup}>
-                    恢复此备份
+                    回滚恢复设置
                   </Button>
                 </div>
 
                 <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-[12px] leading-5 text-blue-900">
                   <span className="font-semibold">说明：</span>
-                  `恢复 auth.json` 只恢复认证文件，不迁移聊天记录；适合聊天记录 provider 已恢复，但登录态仍不对的情况。
+                  `回滚恢复设置` 只从备份读取 provider、索引相关状态和 config provider，不覆盖聊天正文；`恢复 auth.json` 只恢复认证文件。
                 </div>
 
                 <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">

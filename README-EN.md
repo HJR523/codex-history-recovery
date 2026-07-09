@@ -47,6 +47,7 @@ By default, the tool migrates only user-owned main chat threads. It does not mig
 - Automatic pre-restore backup
 - Automatic `auth.json` backup
 - Auth-only `auth.json` restore from project backups
+- Backup-based settings rollback without overwriting chat transcripts
 - Automatic post-restore verification
 - Can be packaged as a Windows installer and portable desktop app
 - Windows double-click launcher
@@ -332,18 +333,37 @@ The backup includes:
 
 ## Backup Rollback
 
-If the result is not what you expected, you can restore one of the automatic backups from the `Backup Rollback` area in the left panel. The backup list only shows backups created by this tool; the tool reads `manifest.json` inside each backup directory and only allows restore or deletion after confirming it was created by this project.
+If the result is not what you expected, select an automatic backup in the left-panel `Backup Rollback` area, then click `Rollback Restore Settings`. The backup list only shows backups created by this tool; the tool reads `manifest.json` inside each backup directory and only allows rollback or deletion after confirming it was created by this project.
+
+`Rollback Restore Settings` does not move chat history back to the backup timestamp. It reads restore-related state from the selected backup and writes only that state into the current Codex root:
+
+- `threads.model_provider` for current thread rows that also exist in the backup
+- `threads.thread_source` for current thread rows that also exist in the backup
+- Archived state for current thread rows that also exist in the backup
+- The first-line `session_meta.payload.model_provider` in current `rollout-*.jsonl` files
+- The top-level `model_provider` in `config.toml`
+- A regenerated `session_index.jsonl`
+- Missing workspace hints
+
+It does not overwrite:
+
+- Chat transcript lines after the first line in `rollout-*.jsonl`
+- Chat content added after the backup was created
+- New thread rows that exist now but did not exist in the backup
+- `auth.json`
+
+Usage:
 
 1. Click `Refresh Backups`.
 2. Select a backup in `Backup Snapshot`.
-3. Click `Restore This Backup`.
+3. Click `Rollback Restore Settings`.
 4. Confirm the prompt.
 
-Before rolling back, the tool automatically creates another backup of the current state. If you pick the wrong backup, you still have a new safety backup to roll back to.
+Before rolling back settings, the tool automatically creates another backup of the current state. If you pick the wrong backup, you still have a new safety backup for another recovery attempt.
 
 It is recommended to close or restart Codex desktop before rolling back, so state files are less likely to be locked.
 
-If you only want to restore authentication state without rolling back chat records, select a backup that contains `auth.json` and click `Restore auth.json`. This writes only the backup's `auth.json` back to the Codex root. It does not change SQLite, JSONL, or chat records.
+If you only want to restore authentication state, select a backup that contains `auth.json` and click `Restore auth.json`. This writes only the backup's `auth.json` back to the Codex root. It does not change SQLite, JSONL, or chat records.
 
 If you no longer need one specific backup, select it in the same area and click `Delete Current Backup`. This only removes the currently selected project backup folder. It does not delete the `.codex` root folder or chat records.
 
