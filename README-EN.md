@@ -46,7 +46,9 @@ By default, the tool migrates only user-owned main chat threads. It does not mig
 - Restore plan check before writing
 - Automatic pre-restore backup
 - Automatic `auth.json` backup
+- Manual current `auth.json` snapshot
 - Auth-only `auth.json` restore from project backups
+- Duplicate manual `auth.json` snapshot cleanup
 - Backup-based settings rollback without overwriting chat transcripts
 - Automatic post-restore verification
 - Can be packaged as a Windows installer and portable desktop app
@@ -237,7 +239,13 @@ After scanning, the tool shows `Auth Status`:
 
 Before writing recovery changes, the tool backs up the current `auth.json`. If you have a previous backup from a time when GPT/ChatGPT account sign-in worked, select that backup in `Backup Rollback` and click `Restore auth.json`. This restores only the auth file and does not migrate chat records.
 
+If the current Codex sign-in state works, it is a good idea to click `Save Current auth.json` and create a dedicated auth snapshot. This snapshot contains only `auth.json` and optional `auth.json.bak`; it does not copy chat transcripts and does not modify provider metadata, SQLite, or `config.toml`.
+
+If repeated saves create duplicates, click `Clean Duplicate Auth Snapshots`. The tool computes a fingerprint from the `auth.json` file content and deletes only older manual auth snapshots with identical content. Full recovery backups are not deleted just because they contain the same `auth.json`.
+
 The tool cannot generate, fake, or convert GPT/ChatGPT account credentials. If there is no usable backup, sign in again through Codex first, then restore chat history.
+
+`auth.json` may contain account credentials or tokens. Do not share auth snapshots, full `.codex` backups, or `auth.json`, and do not upload them to a public repository.
 
 ### What is Target Provider Injection?
 
@@ -365,6 +373,14 @@ It is recommended to close or restart Codex desktop before rolling back, so stat
 
 If you only want to restore authentication state, select a backup that contains `auth.json` and click `Restore auth.json`. This writes only the backup's `auth.json` back to the Codex root. It does not change SQLite, JSONL, or chat records.
 
+If you only want to keep a copy of the current working auth state, click `Save Current auth.json`. It creates a dedicated snapshot named like:
+
+```text
+backup-YYYYMMDD-HHMMSS-manual-auth-snapshot
+```
+
+This type of snapshot is only for `Restore auth.json`; it cannot be used for `Rollback Restore Settings`.
+
 If you no longer need one specific backup, select it in the same area and click `Delete Current Backup`. This only removes the currently selected project backup folder. It does not delete the `.codex` root folder or chat records.
 
 ## Backup Cleanup
@@ -372,6 +388,8 @@ If you no longer need one specific backup, select it in the same area and click 
 Backup folders are only used when you need to roll back to the pre-restore state. Codex does not need these backups for normal operation. After confirming that your sidebar chat history has been restored correctly and you no longer need rollback, you can delete old backups from the UI or manually remove them.
 
 Use `Delete Expired Backups` to batch-clean old backups. Set how many recent backups to keep, for example keep the latest 2; the tool previews how many expired backups will be deleted and asks for confirmation before deleting only older project backups.
+
+Use `Clean Duplicate Auth Snapshots` for a narrower cleanup. It only checks snapshots created by `Save Current auth.json`, keeps the newest copy for each unique `auth.json` content, and deletes older identical copies. It does not delete full recovery backups.
 
 It is recommended to keep at least the latest 1-2 backups. For manual cleanup, open this folder in File Explorer:
 

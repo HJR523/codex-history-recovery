@@ -32,10 +32,12 @@ const browserApi = {
   scan: (payload) => postJson('/api/scan', payload),
   plan: (payload) => postJson('/api/plan', payload),
   apply: (payload) => postJson('/api/apply', payload),
+  saveAuthSnapshot: (payload) => postJson('/api/save-auth-snapshot', payload),
   restoreBackup: (payload) => postJson('/api/restore-backup', payload),
   restoreAuthBackup: (payload) => postJson('/api/restore-auth-backup', payload),
   deleteBackup: (payload) => postJson('/api/delete-backup', payload),
   cleanupBackups: (payload) => postJson('/api/cleanup-backups', payload),
+  cleanupAuthSnapshots: (payload) => postJson('/api/cleanup-auth-snapshots', payload),
 };
 
 const api = window.historyRecovery ?? browserApi;
@@ -369,6 +371,8 @@ function App() {
   const authPath = root ? joinDisplayPath(root, 'auth.json') : '当前 Codex root\\auth.json';
   const selectedBackupAuthMeta = authStatusMeta(selectedBackupInfo?.auth ?? null);
   const openAiAuthWarning = authWarningForTarget(target, authInfo);
+  const authSnapshotCount = backups.filter((item) => item.authSnapshot).length;
+  const canRollbackSelectedBackup = Boolean(selectedBackup && selectedBackupInfo?.hasStateDb);
 
   const payload = useMemo(
     () => ({
@@ -641,6 +645,10 @@ function App() {
       warn('请先选择一个备份');
       return;
     }
+    if (!selectedBackupInfo?.hasStateDb) {
+      warn('所选备份只包含 auth.json，不能用于回滚恢复设置');
+      return;
+    }
     const label = selectedBackupInfo?.name || selectedBackup;
     const yes = window.confirm(`确认回滚恢复设置？\n\n${label}\n\n工具会先备份当前状态，然后从所选备份读取 provider、thread_source、归档状态和 config provider，并写回当前 Codex 状态。\n\n不会覆盖聊天正文，不会把 rollout JSONL 整个恢复到旧版本，也不会删除备份之后新增的聊天内容。\n\nauth.json 请使用单独的“恢复 auth.json”按钮。建议先关闭或重启 Codex 桌面端，避免文件被占用。`);
     if (!yes) return;
@@ -654,6 +662,22 @@ function App() {
     log(`Safety backup created: ${data.safetyBackup}`);
     log(`Settings rollback complete: threads=${data.threads?.changed || 0}/${data.threads?.matched || 0}, JSONL first lines=${data.jsonlChanged || 0}/${data.jsonlMatched || 0}, skipped=${data.jsonlSkipped?.length || 0}`);
     if (data.config?.changed) log(`Config provider restored: ${data.config.previous || '(empty)'} -> ${data.config.current || '(empty)'}`);
+    refreshBackups(root, false);
+  }
+
+  async function handleSaveAuthSnapshot() {
+    if (!String(root || '').trim()) {
+      warn('请先填写 Root Directory');
+      return;
+    }
+    const yes = window.confirm(`确认保存当前 auth.json？\n\n工具会把当前 Codex root 下的 auth.json 保存为一个专用认证快照。\n\n这个操作不会修改聊天记录、provider 或 config.toml。auth.json 可能包含登录凭据，请不要分享生成的备份文件夹。`);
+    if (!yes) return;
+    setStatus({ tone: 'info', text: '正在保存 auth.json...' });
+    const data = await call('save-auth-snapshot', () => api.saveAuthSnapshot({ root }));
+    if (!data) return;
+    setStatus({ tone: data.skipped?.length ? 'warn' : 'good', text: data.skipped?.length ? 'auth.json 已保存，有文件跳过' : 'auth.json 快照已保存' });
+    log(`Auth snapshot saved: ${data.backup}`);
+    log(`Auth snapshot status: ${authStatusMeta(data.auth).label}`);
     refreshBackups(root, false);
   }
 
@@ -679,6 +703,27 @@ function App() {
     log(`Auth restored from backup: ${data.backup}`);
     log(`Safety backup created: ${data.safetyBackup}`);
     log(`Auth change: ${authStatusMeta(data.previousAuth).label} -> ${authStatusMeta(data.restoredAuth).label}`);
+    refreshBackups(root, false);
+  }
+
+  async function handleCleanupAuthSnapshots() {
+    const preview = await call('cleanup-auth-snapshots', () => api.cleanupAuthSnapshots({ root, yes: false }));
+    if (!preview) return;
+    if (!preview.duplicateCount) {
+      setStatus({ tone: 'good', text: '没有重复 auth 快照' });
+      log(`No duplicate auth snapshots. Total=${preview.total}, unique=${preview.uniqueCount}`);
+      return;
+    }
+    const names = (preview.duplicates || []).slice(0, 6).map((item) => item.name).join('\n');
+    const more = preview.duplicateCount > 6 ? `\n...以及另外 ${preview.duplicateCount - 6} 个` : '';
+    const yes = window.confirm(`确认清理重复 auth 快照？\n\n工具只会删除“保存当前 auth.json”生成的专用认证快照，并且只删除 auth.json 内容完全相同的旧副本。\n\n完整恢复备份不会因为 auth.json 重复而被删除。\n\n将删除 ${preview.duplicateCount} 个重复快照：\n${names}${more}`);
+    if (!yes) return;
+    setStatus({ tone: 'info', text: '正在清理重复 auth 快照...' });
+    const data = await call('cleanup-auth-snapshots', () => api.cleanupAuthSnapshots({ root, yes: true }));
+    if (!data) return;
+    setSelectedBackup('');
+    setStatus({ tone: 'good', text: '重复 auth 快照已清理' });
+    log(`Duplicate auth snapshots deleted: ${data.deleted.length}, unique=${data.uniqueCount}`);
     refreshBackups(root, false);
   }
 
@@ -895,6 +940,10 @@ function App() {
                   {selectedBackupInfo ? (
                     <div className="space-y-1.5">
                       <div className="flex justify-between gap-3">
+                        <span className="font-semibold text-slate-700">备份类型</span>
+                        <span className="text-right">{selectedBackupInfo.authSnapshot ? 'auth.json 快照' : '完整恢复备份'}</span>
+                      </div>
+                      <div className="flex justify-between gap-3">
                         <span className="font-semibold text-slate-700">创建时间</span>
                         <span className="text-right">{new Date(selectedBackupInfo.createdAt).toLocaleString()}</span>
                       </div>
@@ -908,10 +957,31 @@ function App() {
                           {selectedBackupInfo.hasAuthJson ? selectedBackupAuthMeta.label : '不包含 auth.json'}
                         </span>
                       </div>
+                      {selectedBackupInfo.authHash ? (
+                        <div className="flex justify-between gap-3">
+                          <span className="font-semibold text-slate-700">认证指纹</span>
+                          <span className="font-mono text-slate-700">{selectedBackupInfo.authHash.slice(0, 12)}</span>
+                        </div>
+                      ) : null}
                     </div>
                   ) : (
                     <span className="font-medium text-slate-400">选择备份后显示详情</span>
                   )}
+                </div>
+
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3">
+                  <div className="mb-3">
+                    <div className="text-[13px] font-semibold text-emerald-950">auth.json 快照</div>
+                    <p className="mt-1 text-[12px] leading-5 text-emerald-800/80">手动保存当前认证文件；重复清理只处理这些专用快照，不删除完整恢复备份。</p>
+                  </div>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <Button tone="soft" disabled={!root} busy={busy === 'save-auth-snapshot'} onClick={handleSaveAuthSnapshot}>
+                      保存当前 auth.json
+                    </Button>
+                    <Button tone="danger" disabled={!authSnapshotCount} busy={busy === 'cleanup-auth-snapshots'} onClick={handleCleanupAuthSnapshots}>
+                      清理重复 auth 快照
+                    </Button>
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -921,7 +991,7 @@ function App() {
                   <Button tone="soft" disabled={!selectedBackup || !selectedBackupInfo?.hasAuthJson} busy={busy === 'restore-auth-backup'} onClick={handleRestoreAuthBackup}>
                     恢复 auth.json
                   </Button>
-                  <Button tone="accent" disabled={!selectedBackup} busy={busy === 'restore-backup'} onClick={handleRestoreBackup}>
+                  <Button tone="accent" disabled={!canRollbackSelectedBackup} busy={busy === 'restore-backup'} onClick={handleRestoreBackup}>
                     回滚恢复设置
                   </Button>
                 </div>

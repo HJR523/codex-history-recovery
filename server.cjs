@@ -1,6 +1,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { DatabaseSync } = require('node:sqlite');
 const { exec } = require('child_process');
 
@@ -8,7 +9,8 @@ const ROOT = __dirname;
 const DIST = path.join(ROOT, 'dist');
 const THREAD_ID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 const BACKUP_DIR_RE = /^backup-\d{8}-\d{6}-.+/;
-const PROJECT_BACKUP_REASONS = new Set(['pre-chat-history-restore', 'pre-backup-restore', 'pre-settings-rollback']);
+const AUTH_SNAPSHOT_REASON = 'manual-auth-snapshot';
+const PROJECT_BACKUP_REASONS = new Set(['pre-chat-history-restore', 'pre-backup-restore', 'pre-settings-rollback', AUTH_SNAPSHOT_REASON]);
 const STATE_FILE_NAMES = ['state_5.sqlite', 'state_5.sqlite-wal', 'state_5.sqlite-shm', 'session_index.jsonl', '.codex-global-state.json', 'config.toml', 'config.toml.bak', 'auth.json', 'auth.json.bak'];
 const RESTORABLE_DIR_NAMES = ['sessions', 'archived_sessions'];
 
@@ -107,6 +109,18 @@ function readTextIfExists(file) {
   return fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '');
 }
 
+function hashFile(file) {
+  return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+}
+
+function safeHashFile(file) {
+  try {
+    return fs.existsSync(file) ? hashFile(file) : '';
+  } catch {
+    return '';
+  }
+}
+
 function collectAuthSignals(value, signals = new Set(), depth = 0) {
   if (!value || typeof value !== 'object' || depth > 4) return signals;
   for (const [key, child] of Object.entries(value)) {
@@ -126,6 +140,8 @@ function readAuthSummaryFromPath(authPath) {
     path: authPath,
     exists: fs.existsSync(authPath),
     readable: false,
+    size: 0,
+    modifiedAt: '',
     authMode: '',
     hasApiKey: false,
     likelyAccountAuth: false,
@@ -134,6 +150,11 @@ function readAuthSummaryFromPath(authPath) {
     error: '',
   };
   if (!summary.exists) return summary;
+  try {
+    const stat = fs.statSync(authPath);
+    summary.size = stat.size;
+    summary.modifiedAt = stat.mtime.toISOString();
+  } catch {}
   try {
     const text = fs.readFileSync(authPath, 'utf8').replace(/^\uFEFF/, '');
     const auth = text.trim() ? JSON.parse(text) : {};
@@ -275,9 +296,22 @@ function copyFileSafe(src, dest, skipped) {
   }
 }
 
+function backupStamp() {
+  return new Date().toISOString().replace(/[-:]/g, '').replace(/\..+$/, '').replace('T', '-');
+}
+
+function createUniqueBackupPath(root, reason) {
+  const base = path.join(root, `backup-${backupStamp()}-${reason}`);
+  if (!fs.existsSync(base)) return base;
+  for (let i = 2; i < 1000; i += 1) {
+    const candidate = `${base}-${i}`;
+    if (!fs.existsSync(candidate)) return candidate;
+  }
+  throw new Error(`Unable to create a unique backup directory for ${reason}.`);
+}
+
 function createCodexStateBackup(root, { targetProvider = '', oldProviders = [], includeSubagents = false, reason = 'pre-chat-history-restore' } = {}) {
-  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+$/, '').replace('T', '-');
-  const backup = path.join(root, `backup-${stamp}-${reason}`);
+  const backup = createUniqueBackupPath(root, reason);
   const skipped = [];
   fs.mkdirSync(path.join(backup, 'files'), { recursive: true });
   for (const name of STATE_FILE_NAMES) {
@@ -301,6 +335,39 @@ function createCodexStateBackup(root, { targetProvider = '', oldProviders = [], 
     skipped,
   }, null, 2), 'utf8');
   return { backup, skipped };
+}
+
+function createAuthSnapshot({ root }) {
+  if (!root || !fs.existsSync(root)) throw new Error(`Missing Codex root: ${root || '(empty)'}`);
+  const src = path.join(root, 'auth.json');
+  if (!fs.existsSync(src)) throw new Error(`Missing auth.json: ${src}`);
+
+  const backup = createUniqueBackupPath(root, AUTH_SNAPSHOT_REASON);
+  const skipped = [];
+  fs.mkdirSync(backup, { recursive: true });
+  copyFileSafe(src, path.join(backup, 'auth.json'), skipped);
+  const bak = path.join(root, 'auth.json.bak');
+  if (fs.existsSync(bak)) copyFileSafe(bak, path.join(backup, 'auth.json.bak'), skipped);
+  const snapshotAuthPath = path.join(backup, 'auth.json');
+  if (!fs.existsSync(snapshotAuthPath)) {
+    try { fs.rmSync(backup, { recursive: true, force: true }); } catch {}
+    throw new Error('Could not save auth.json snapshot.');
+  }
+
+  const auth = readAuthSummaryFromPath(snapshotAuthPath);
+  const authHash = safeHashFile(snapshotAuthPath);
+  fs.writeFileSync(path.join(backup, 'manifest.json'), JSON.stringify({
+    createdAt: new Date().toISOString(),
+    reason: AUTH_SNAPSHOT_REASON,
+    root,
+    scope: 'auth-json-only',
+    authHash,
+    authSize: auth.size,
+    authModifiedAt: auth.modifiedAt,
+    skipped,
+  }, null, 2), 'utf8');
+
+  return { root, backup, skipped, auth, authHash };
 }
 
 function backupCodexState(root, targetProvider, oldProviders, includeSubagents) {
@@ -333,7 +400,8 @@ function listBackups({ root }) {
       try { manifest = readBackupManifest(backupPath); } catch {}
       if (!isProjectBackupManifest(manifest)) return null;
       const stat = fs.statSync(backupPath);
-      const auth = readAuthSummaryFromPath(path.join(backupPath, 'auth.json'));
+      const authPath = path.join(backupPath, 'auth.json');
+      const auth = readAuthSummaryFromPath(authPath);
       return {
         name: entry.name,
         path: backupPath,
@@ -342,6 +410,11 @@ function listBackups({ root }) {
         targetProvider: manifest.targetProvider || '',
         includeSubagents: Boolean(manifest.includeSubagents),
         hasAuthJson: auth.exists,
+        hasStateDb: fs.existsSync(path.join(backupPath, 'state_5.sqlite')),
+        authSnapshot: String(manifest.reason || '') === AUTH_SNAPSHOT_REASON,
+        authHash: manifest.authHash || safeHashFile(authPath),
+        authSize: auth.size,
+        authModifiedAt: auth.modifiedAt,
         auth,
         projectBackup: true,
       };
@@ -573,6 +646,54 @@ function cleanupExpiredBackups({ root, keep, yes = false }) {
   };
 }
 
+function cleanupDuplicateAuthSnapshots({ root, yes = false }) {
+  const snapshots = listBackups({ root }).backups
+    .filter((item) => item.reason === AUTH_SNAPSHOT_REASON);
+  const seen = new Map();
+  const kept = [];
+  const duplicates = [];
+  const skipped = [];
+
+  for (const item of snapshots) {
+    if (!item.authHash) {
+      skipped.push({ path: item.path, reason: 'auth.json hash unavailable' });
+      continue;
+    }
+    const first = seen.get(item.authHash);
+    if (!first) {
+      seen.set(item.authHash, item);
+      kept.push(item);
+      continue;
+    }
+    duplicates.push({ ...item, duplicateOf: first.path });
+  }
+
+  const deleted = [];
+  if (yes) {
+    for (const item of duplicates) {
+      const backup = resolveBackup(root, item.path);
+      if (backup.manifest.reason !== AUTH_SNAPSHOT_REASON) {
+        skipped.push({ path: item.path, reason: 'not a manual auth snapshot' });
+        continue;
+      }
+      fs.rmSync(backup.path, { recursive: true, force: false });
+      deleted.push(backup.path);
+    }
+  }
+
+  return {
+    root,
+    total: snapshots.length,
+    uniqueCount: kept.length,
+    duplicateCount: duplicates.length,
+    kept,
+    duplicates: yes ? [] : duplicates,
+    skipped,
+    deleted,
+    dryRun: !yes,
+  };
+}
+
 function updateJsonlFiles(root, candidateRows, targetProvider) {
   const candidateIds = new Set(candidateRows.map((row) => String(row.id)));
   const changed = [];
@@ -794,10 +915,12 @@ async function handleApi(req, res) {
     if (req.url === '/api/scan') return sendJson(res, 200, { ok: true, data: scanState(body) });
     if (req.url === '/api/plan') return sendJson(res, 200, { ok: true, data: buildPlan(body) });
     if (req.url === '/api/apply') return sendJson(res, 200, { ok: true, data: applyRestore(body) });
+    if (req.url === '/api/save-auth-snapshot') return sendJson(res, 200, { ok: true, data: createAuthSnapshot(body) });
     if (req.url === '/api/restore-backup') return sendJson(res, 200, { ok: true, data: restoreSettingsFromBackup(body) });
     if (req.url === '/api/restore-auth-backup') return sendJson(res, 200, { ok: true, data: restoreAuthFromBackup(body) });
     if (req.url === '/api/delete-backup') return sendJson(res, 200, { ok: true, data: deleteBackup(body) });
     if (req.url === '/api/cleanup-backups') return sendJson(res, 200, { ok: true, data: cleanupExpiredBackups(body) });
+    if (req.url === '/api/cleanup-auth-snapshots') return sendJson(res, 200, { ok: true, data: cleanupDuplicateAuthSnapshots(body) });
     return sendJson(res, 404, { ok: false, error: { message: 'Not found' } });
   } catch (error) {
     return sendJson(res, 200, { ok: false, error: normalizeError(error) });
