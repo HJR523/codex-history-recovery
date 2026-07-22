@@ -25,6 +25,7 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
+    "test": "node --test --experimental-test-isolation=none",
     "start": "node --no-warnings server.cjs",
     "app": "npm run build && npm run start",
     "desktop": "npm run build && electron .",

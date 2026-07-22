@@ -1,9 +1,38 @@
-const { app, BrowserWindow, dialog, shell } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
 const path = require('path');
 const { createServer } = require('../server.cjs');
 
 let mainWindow = null;
 let serverHandle = null;
+function openDialog(options) {
+  return mainWindow ? dialog.showOpenDialog(mainWindow, options) : dialog.showOpenDialog(options);
+}
+
+function saveDialog(options) {
+  return mainWindow ? dialog.showSaveDialog(mainWindow, options) : dialog.showSaveDialog(options);
+}
+
+ipcMain.handle('history-recovery:select-folder', async () => {
+  const result = await openDialog({ properties: ['openDirectory', 'createDirectory'] });
+  return result.canceled ? null : result.filePaths[0] || null;
+});
+
+ipcMain.handle('history-recovery:select-export-file', async () => {
+  const result = await saveDialog({
+    defaultPath: path.join(app.getPath('documents'), 'codex-history-transfer.codex-history'),
+    filters: [{ name: 'Codex History Migration', extensions: ['codex-history'] }],
+  });
+  return result.canceled ? null : result.filePath || null;
+});
+
+ipcMain.handle('history-recovery:select-import-file', async () => {
+  const result = await openDialog({
+    properties: ['openFile'],
+    filters: [{ name: 'Codex History Migration', extensions: ['codex-history'] }],
+  });
+  return result.canceled ? null : result.filePaths[0] || null;
+});
+
 
 function getPreloadPath() {
   return path.join(__dirname, 'preload.cjs');

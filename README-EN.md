@@ -46,10 +46,13 @@ By default, the tool migrates only user-owned main chat threads. It does not mig
 - Restore plan check before writing
 - Automatic pre-restore backup
 - Automatic `auth.json` backup
+- Select individual user chats, export them as `.codex-history`, then preflight and selectively import them on another computer or Windows user profile
 - Manual current `auth.json` snapshot
-- Auth-only `auth.json` restore from project backups
-- Duplicate manual `auth.json` snapshot cleanup
+- Automatic duplicate cleanup when saving manual `auth.json` snapshots
 - Backup-based settings rollback without overwriting chat transcripts
+- Backup config provider and complete `auth.json` inspection and editing
+- Separate or combined config provider and `auth.json` application
+- Providers deduplicated by name and auth versions deduplicated by content fingerprint, with custom auth names
 - Automatic post-restore verification
 - Can be packaged as a Windows installer and portable desktop app
 - Windows double-click launcher
@@ -154,6 +157,22 @@ If the port is already in use, the tool automatically tries the next port.
 
 ## Core Concepts
 
+### Cross-Computer / Cross-Windows-User Migration
+
+This feature migrates locally stored main user chats (`thread_source='user'`) only; it does not include subagents. It is not account or sign-in migration: a migration package never includes `auth.json`, `config.toml`, API keys, tokens, or other credentials.
+
+1. On the source computer or Windows user profile, open `Chat Migration Package: Export`, load the chat list, select the chats to package, and choose a destination.
+2. Copy the generated `.codex-history` file to the target computer or Windows user profile.
+3. At the target Codex root, use `Chat Migration Package: Import` to select and inspect the package. The UI marks every item as `New`, `Already present`, `Conflict`, or `Incompatible`; only `New` chats are importable.
+4. Optionally provide a Target Provider override and one source-workspace → target-workspace path mapping. They affect only the imported chats and do not change the target `config.toml`.
+5. Start the import. The tool creates a `pre-chat-history-import` safety backup first, imports the thread records and JSONL transcripts, then rebuilds `session_index.jsonl` and workspace hints.
+
+The same chat ID with identical data is treated as already present and skipped. The same ID with different data is a conflict and never overwrites target data. The source and target `threads` schemas must match exactly or the import fails closed. Close Codex on both sides before migration when possible, so active session files are not locked.
+
+Safety backups use a consistent SQLite snapshot, and any critical file-copy failure aborts the import or recovery before writes begin. Database and related settings files use a coordinated transaction that restores the original state after a write or verification failure. Compression and decompression run asynchronously; a migration package may be up to 128 MB compressed and 256 MB unpacked, so export chats in smaller batches if that limit is exceeded.
+
+The package preserves selected transcript text. If a chat contains pasted credentials or private data, that content also travels with the package, so store it as sensitive data.
+
 ### Codex root
 
 The local Codex state directory. The default location is:
@@ -237,11 +256,11 @@ After scanning, the tool shows `Auth Status`:
 - `Account sign-in likely exists`: account-login signals were detected, but the final check is whether Codex can actually send messages
 - `auth.json not found`: no auth file was found under the selected Codex root
 
-Before writing recovery changes, the tool backs up the current `auth.json`. If you have a previous backup from a time when GPT/ChatGPT account sign-in worked, select that backup in `Backup Rollback` and click `Restore auth.json`. This restores only the auth file and does not migrate chat records.
+Before writing recovery changes, the tool backs up the current `auth.json`. If you have a previous backup from a time when GPT/ChatGPT account sign-in worked, select, inspect, and apply it independently under `auth.json Version` in `Backup Version Content`. This does not migrate chat records.
 
 If the current Codex sign-in state works, it is a good idea to click `Save Current auth.json` and create a dedicated auth snapshot. This snapshot contains only `auth.json` and optional `auth.json.bak`; it does not copy chat transcripts and does not modify provider metadata, SQLite, or `config.toml`.
 
-If repeated saves create duplicates, click `Clean Duplicate Auth Snapshots`. The tool computes a fingerprint from the `auth.json` file content and deletes only older manual auth snapshots with identical content. Full recovery backups are not deleted just because they contain the same `auth.json`.
+After a snapshot is saved, the tool computes a fingerprint from the `auth.json` content and automatically deletes older manual auth snapshots with identical content. Full recovery backups are not deleted just because they contain the same `auth.json`.
 
 The tool cannot generate, fake, or convert GPT/ChatGPT account credentials. If there is no usable backup, sign in again through Codex first, then restore chat history.
 
@@ -371,7 +390,30 @@ Before rolling back settings, the tool automatically creates another backup of t
 
 It is recommended to close or restart Codex desktop before rolling back, so state files are less likely to be locked.
 
-If you only want to restore authentication state, select a backup that contains `auth.json` and click `Restore auth.json`. This writes only the backup's `auth.json` back to the Codex root. It does not change SQLite, JSONL, or chat records.
+### Inspecting and editing a backup version
+
+The bottom section places `Backup Rollback` and `Backup Version Content` side by side. Version inspection does not depend on the backup selected in the rollback module.
+
+`Backup Version Content` provides two independent selectors:
+
+- `Provider Version`: collects the top-level `model_provider` from every backup `config.toml` and deduplicates values by name, such as `openai` and `custom`
+- `auth.json Version`: collects backups containing authentication files and deduplicates them by the `auth.json` content fingerprint
+
+The selected provider can still be edited before applying. Every auth version has a custom display name that can be changed and saved in the UI; duplicate backups with the same content fingerprint receive the same name. Renaming writes only to backup `manifest.json` files and does not modify authentication content. A custom version name can also be entered when saving the current `auth.json` snapshot.
+
+Both the Provider and auth.json sections include a delete-current-backup button. It deletes only the single backup folder represented by the current selection; it does not bulk-delete matching Provider names or auth fingerprints, and it does not modify the active `.codex` configuration, credentials, or chats. Because one backup folder may contain both Provider and auth.json data, the confirmation dialog warns when deleting it may also affect the other version list.
+
+You can apply `config.toml` and `auth.json` separately or together. The edited values are written to the current Codex root after a full safety backup is created. The original provider and auth content in the backup are not modified, and edited `auth.json` must be a valid JSON object.
+
+The complete `auth.json` may contain credentials and tokens. Do not screenshot, record, or share its displayed content.
+
+### Why settings rollback preserves current chats
+
+`Rollback Restore Settings` is the path that preserves the newest chat content. It does not copy chat transcripts from the backup. Instead, it maps provider, thread source, and archive metadata from the backup onto matching current threads, updates only the first JSONL metadata line, and rebuilds the current index. Chat transcript content created or updated after the backup remains intact.
+
+The tool does not provide a mode that overwrites current chat transcripts and session directories with an older full snapshot.
+
+If you only want to apply an authentication state, select an `auth.json Version` under `Backup Version Content`, enable `Apply` for `Complete auth.json`, and click `Apply Selected Content`. This does not change SQLite, JSONL, or chat records.
 
 If you only want to keep a copy of the current working auth state, click `Save Current auth.json`. It creates a dedicated snapshot named like:
 
@@ -379,7 +421,7 @@ If you only want to keep a copy of the current working auth state, click `Save C
 backup-YYYYMMDD-HHMMSS-manual-auth-snapshot
 ```
 
-This type of snapshot is only for `Restore auth.json`; it cannot be used for `Rollback Restore Settings`.
+This type of snapshot appears in the `auth.json Version` list and can be inspected, edited, and applied independently, but it cannot be used for `Rollback Restore Settings`. Older manual snapshots with identical content are removed automatically after saving.
 
 If you no longer need one specific backup, select it in the same area and click `Delete Current Backup`. This only removes the currently selected project backup folder. It does not delete the `.codex` root folder or chat records.
 
@@ -389,7 +431,7 @@ Backup folders are only used when you need to roll back to the pre-restore state
 
 Use `Delete Expired Backups` to batch-clean old backups. Set how many recent backups to keep, for example keep the latest 2; the tool previews how many expired backups will be deleted and asks for confirmation before deleting only older project backups.
 
-Use `Clean Duplicate Auth Snapshots` for a narrower cleanup. It only checks snapshots created by `Save Current auth.json`, keeps the newest copy for each unique `auth.json` content, and deletes older identical copies. It does not delete full recovery backups.
+Duplicate auth snapshots do not require a manual cleanup action. After each `Save Current auth.json`, the tool checks dedicated auth snapshots, keeps the newest copy for each unique `auth.json` content, and deletes older identical copies. Full recovery backups are excluded from this cleanup.
 
 It is recommended to keep at least the latest 1-2 backups. For manual cleanup, open this folder in File Explorer:
 
@@ -489,7 +531,7 @@ Check `Auth Status` in the UI first. If it says `API Key mode`, `auth.json not f
 Possible fixes:
 
 - Sign in to your GPT/ChatGPT account in Codex first, then run this tool to restore chats
-- If a project backup contains a previously working account sign-in state, select it and click `Restore auth.json`
+- If a project backup contains a previously working account sign-in state, select that `auth.json Version` under `Backup Version Content` and apply it independently
 - If you actually use API Key auth or a custom provider, do not blindly change the Target Provider to `openai`; use the provider that can currently send messages
 
 ### Not sure which Target Provider to use

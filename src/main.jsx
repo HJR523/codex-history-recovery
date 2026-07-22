@@ -8,11 +8,14 @@ import {
   Activity,
   Cpu,
   Database,
+  FileJson,
   FolderSearch,
   Gauge,
   ListChecks,
   RotateCcw,
+  Save,
   TerminalSquare,
+  Trash2,
 } from 'lucide-react';
 import './styles.css';
 
@@ -28,19 +31,26 @@ async function postJson(url, payload = {}) {
 const browserApi = {
   getDefaults: () => postJson('/api/defaults'),
   selectFolder: async () => window.prompt('请输入 Codex root 路径，例如 C:\\Users\\你\\.codex') || null,
+  selectExportFile: async () => window.prompt('请输入迁移包保存路径，例如 D:\\backup\\codex-history.codex-history') || null,
+  selectImportFile: async () => window.prompt('请输入迁移包路径，例如 D:\\backup\\codex-history.codex-history') || null,
   backups: (payload) => postJson('/api/backups', payload),
+  backupContent: (payload) => postJson('/api/backup-content', payload),
+  applyBackupContent: (payload) => postJson('/api/apply-backup-content', payload),
+  renameBackupAuth: (payload) => postJson('/api/rename-backup-auth', payload),
+  transferThreads: (payload) => postJson('/api/transfer-threads', payload),
+  exportTransfer: (payload) => postJson('/api/export-transfer', payload),
+  inspectTransfer: (payload) => postJson('/api/inspect-transfer', payload),
+  importTransfer: (payload) => postJson('/api/import-transfer', payload),
   scan: (payload) => postJson('/api/scan', payload),
   plan: (payload) => postJson('/api/plan', payload),
   apply: (payload) => postJson('/api/apply', payload),
   saveAuthSnapshot: (payload) => postJson('/api/save-auth-snapshot', payload),
   restoreBackup: (payload) => postJson('/api/restore-backup', payload),
-  restoreAuthBackup: (payload) => postJson('/api/restore-auth-backup', payload),
   deleteBackup: (payload) => postJson('/api/delete-backup', payload),
   cleanupBackups: (payload) => postJson('/api/cleanup-backups', payload),
-  cleanupAuthSnapshots: (payload) => postJson('/api/cleanup-auth-snapshots', payload),
 };
 
-const api = window.historyRecovery ?? browserApi;
+const api = { ...browserApi, ...(window.historyRecovery ?? {}) };
 
 function now() {
   const d = new Date();
@@ -49,6 +59,38 @@ function now() {
 
 function cx(...parts) {
   return parts.filter(Boolean).join(' ');
+}
+
+function dedupeBackups(items = []) {
+  const seen = new Set();
+  return items.filter((item) => {
+    const key = String(item?.path || item?.name || '').trim().toLowerCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function uniqueBackupProviders(items = []) {
+  const seen = new Set();
+  return items.filter((item) => {
+    const provider = String(item?.configModelProvider || '').trim();
+    const key = provider.toLowerCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function uniqueAuthBackups(items = []) {
+  const seen = new Set();
+  return items.filter((item) => {
+    if (!item?.hasAuthJson) return false;
+    const key = String(item.authHash || item.path || '').trim().toLowerCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function joinDisplayPath(base, file) {
@@ -112,10 +154,10 @@ function authToneClass(tone) {
 function authWarningForTarget(targetProvider, auth) {
   if (String(targetProvider || '').trim().toLowerCase() !== 'openai' || !auth) return '';
   if (!auth.exists) {
-    return 'Target Provider 是 openai，但当前目录没有 auth.json；这不会恢复 GPT/ChatGPT 账号登录，可能仍然无法发送消息。请先在 Codex 中重新登录账号，或从含账号登录态的备份恢复 auth.json。';
+    return 'Target Provider 是 openai，但当前目录没有 auth.json；这不会恢复 GPT/ChatGPT 账号登录，可能仍然无法发送消息。请先在 Codex 中重新登录账号，或在“备份版本内容”中应用可用的 auth.json 版本。';
   }
   if (auth.authType === 'api_key') {
-    return 'Target Provider 是 openai，但当前 auth.json 是 API Key 模式；这不会恢复 GPT/ChatGPT 账号登录，可能仍然无法发送消息。请先在 Codex 中重新登录账号，或从含账号登录态的备份恢复 auth.json。';
+    return 'Target Provider 是 openai，但当前 auth.json 是 API Key 模式；这不会恢复 GPT/ChatGPT 账号登录，可能仍然无法发送消息。请先在 Codex 中重新登录账号，或在“备份版本内容”中应用可用的 auth.json 版本。';
   }
   if (auth.authType === 'unknown' || auth.authType === 'unreadable') {
     return 'Target Provider 是 openai，但工具无法确认当前 auth.json 是否为 GPT/ChatGPT 账号登录态。恢复聊天记录可以继续，但登录态需要以 Codex 实际能否发消息为准。';
@@ -342,6 +384,99 @@ function PlanCard({ plan }) {
   );
 }
 
+function formatThreadTime(value) {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric) || numeric <= 0) return '-';
+  const date = new Date(numeric);
+  return Number.isNaN(date.getTime()) ? '-' : date.toLocaleString();
+}
+
+function importStatusMeta(status) {
+  if (status === 'new') return { label: '可导入', className: 'border-emerald-200 bg-emerald-50 text-emerald-700' };
+  if (status === 'duplicate') return { label: '已存在', className: 'border-slate-200 bg-slate-100 text-slate-600' };
+  if (status === 'conflict') return { label: '冲突', className: 'border-rose-200 bg-rose-50 text-rose-700' };
+  return { label: '不兼容', className: 'border-amber-200 bg-amber-50 text-amber-800' };
+}
+
+function TransferThreadPicker({
+  threads = [],
+  selectedIds = [],
+  mode,
+  query,
+  onQueryChange,
+  onToggle,
+  onSelectAll,
+  onClear,
+  emptyText,
+}) {
+  const selected = new Set(selectedIds);
+  const keyword = String(query || '').trim().toLowerCase();
+  const rows = threads.filter((thread) => {
+    if (!keyword) return true;
+    return [thread.title, thread.id, thread.modelProvider, thread.cwd].some((value) => String(value || '').toLowerCase().includes(keyword));
+  });
+  const selectable = rows.filter((thread) => mode === 'export' ? thread.exportable : thread.canImport);
+  const isExport = mode === 'export';
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-col gap-2 sm:flex-row">
+        <input
+          value={query}
+          onChange={(event) => onQueryChange(event.target.value)}
+          className={cx(inputClass, 'h-9 flex-1 px-3 text-[12px]')}
+          placeholder="按标题、ID、Provider 或路径筛选"
+        />
+        <div className="flex shrink-0 gap-2">
+          <button type="button" onClick={() => onSelectAll(selectable.map((thread) => thread.id))} className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-[12px] font-semibold text-slate-700 hover:border-orange-300 hover:text-orange-700">全选可用</button>
+          <button type="button" onClick={onClear} className="h-9 rounded-lg border border-slate-200 bg-slate-50 px-3 text-[12px] font-semibold text-slate-600 hover:border-slate-300">清空</button>
+        </div>
+      </div>
+
+      <div className="max-h-[320px] overflow-y-auto rounded-lg border border-slate-200 bg-slate-50">
+        {!rows.length ? (
+          <div className="px-4 py-8 text-center text-[12px] font-medium text-slate-500">{emptyText}</div>
+        ) : rows.map((thread) => {
+          const canSelect = isExport ? thread.exportable : thread.canImport;
+          const importMeta = isExport ? null : importStatusMeta(thread.status);
+          const checked = selected.has(thread.id);
+          return (
+            <label key={thread.id} className={cx('flex cursor-pointer gap-3 border-b border-slate-200 px-3 py-3 last:border-b-0', canSelect ? 'bg-white hover:bg-orange-50/40' : 'cursor-not-allowed bg-slate-50 opacity-75')}>
+              <input
+                type="checkbox"
+                checked={checked}
+                disabled={!canSelect}
+                onChange={() => onToggle(thread.id)}
+                className="mt-0.5 h-4 w-4 shrink-0 accent-orange-600 disabled:cursor-not-allowed"
+              />
+              <span className="min-w-0 flex-1">
+                <span className="flex min-w-0 items-start justify-between gap-3">
+                  <span className="truncate text-[13px] font-semibold text-slate-900">{thread.title || '未命名聊天'}</span>
+                  {isExport ? (
+                    <span className={cx('shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold', thread.exportable ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-amber-200 bg-amber-50 text-amber-800')}>
+                      {thread.exportable ? '可打包' : '缺少正文'}
+                    </span>
+                  ) : (
+                    <span className={cx('shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold', importMeta.className)}>{importMeta.label}</span>
+                  )}
+                </span>
+                <span className="mt-1 block break-all font-mono text-[10px] text-slate-500">{thread.id}</span>
+                <span className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-600">
+                  <span>Provider: {thread.modelProvider || '-'}</span>
+                  <span>{formatThreadTime(thread.updatedAtMs)}</span>
+                  <span>{thread.archived ? '已归档' : '主列表'}</span>
+                  <span>JSONL: {thread.sessionCount ?? '-'}</span>
+                </span>
+                {!isExport && thread.reason ? <span className="mt-1 block text-[11px] leading-4 text-slate-500">{thread.reason}</span> : null}
+              </span>
+            </label>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [root, setRoot] = useState('');
   const [scan, setScan] = useState(null);
@@ -352,16 +487,42 @@ function App() {
   const [applyResult, setApplyResult] = useState(null);
   const [defaultsInfo, setDefaultsInfo] = useState(null);
   const [backups, setBackups] = useState([]);
-  const [selectedBackup, setSelectedBackup] = useState('');
+  const [selectedRollbackBackup, setSelectedRollbackBackup] = useState('');
+  const [selectedConfigProvider, setSelectedConfigProvider] = useState('');
+  const [selectedAuthBackup, setSelectedAuthBackup] = useState('');
+  const [backupContent, setBackupContent] = useState(null);
+  const [backupProviderDraft, setBackupProviderDraft] = useState('');
+  const [backupAuthDraft, setBackupAuthDraft] = useState('');
+  const [authDisplayNameDraft, setAuthDisplayNameDraft] = useState('');
+  const [applyBackupConfig, setApplyBackupConfig] = useState(true);
+  const [applyBackupAuth, setApplyBackupAuth] = useState(false);
   const [backupKeepCount, setBackupKeepCount] = useState(2);
+  const [transferThreads, setTransferThreads] = useState([]);
+  const [selectedExportThreadIds, setSelectedExportThreadIds] = useState([]);
+  const [exportPackagePath, setExportPackagePath] = useState('');
+  const [exportQuery, setExportQuery] = useState('');
+  const [importPackagePath, setImportPackagePath] = useState('');
+  const [importPreview, setImportPreview] = useState(null);
+  const [selectedImportThreadIds, setSelectedImportThreadIds] = useState([]);
+  const [importQuery, setImportQuery] = useState('');
+  const [importProvider, setImportProvider] = useState('');
+  const [workspacePathFrom, setWorkspacePathFrom] = useState('');
+  const [workspacePathTo, setWorkspacePathTo] = useState('');
+  const [transferResult, setTransferResult] = useState(null);
+
   const [busy, setBusy] = useState('');
   const [status, setStatus] = useState({ tone: 'info', text: '系统就绪，等待配置路径' });
   const [logs, setLogs] = useState([{ time: now(), text: 'System ready. Awaiting parameters...' }]);
 
   const providerOptions = scan?.providers ?? [];
+  const uniqueBackups = useMemo(() => dedupeBackups(backups), [backups]);
+  const backupProviderOptions = useMemo(() => uniqueBackupProviders(uniqueBackups), [uniqueBackups]);
+  const authBackupOptions = useMemo(() => uniqueAuthBackups(uniqueBackups), [uniqueBackups]);
   const configProvider = scan?.configModelProvider ?? '';
   const latestProvider = scan?.latestUser?.model_provider ?? '';
-  const selectedBackupInfo = backups.find((item) => item.path === selectedBackup);
+  const selectedRollbackBackupInfo = uniqueBackups.find((item) => item.path === selectedRollbackBackup);
+  const selectedConfigProviderInfo = backupProviderOptions.find((item) => item.configModelProvider === selectedConfigProvider);
+  const selectedAuthBackupInfo = authBackupOptions.find((item) => item.path === selectedAuthBackup);
   const rootHint = defaultsInfo?.root === root ? (defaultsInfo.rootExists ? '已自动检测' : '需确认') : root ? '已填写' : '未填写';
   const stateDbReady = Boolean(defaultsInfo?.root === root && defaultsInfo.rootExists);
   const stateDbStatus = stateDbReady ? '已就绪' : root ? '待确认' : '未就绪';
@@ -369,10 +530,10 @@ function App() {
   const authInfo = scan?.auth ?? null;
   const authMeta = authStatusMeta(authInfo);
   const authPath = root ? joinDisplayPath(root, 'auth.json') : '当前 Codex root\\auth.json';
-  const selectedBackupAuthMeta = authStatusMeta(selectedBackupInfo?.auth ?? null);
+  const selectedRollbackBackupAuthMeta = authStatusMeta(selectedRollbackBackupInfo?.auth ?? null);
   const openAiAuthWarning = authWarningForTarget(target, authInfo);
-  const authSnapshotCount = backups.filter((item) => item.authSnapshot).length;
-  const canRollbackSelectedBackup = Boolean(selectedBackup && selectedBackupInfo?.hasStateDb);
+  const canRollbackSelectedBackup = Boolean(selectedRollbackBackup && selectedRollbackBackupInfo?.hasStateDb);
+  const canApplyBackupContent = Boolean((applyBackupConfig && backupProviderDraft.trim()) || (applyBackupAuth && selectedAuthBackup && backupContent));
 
   const payload = useMemo(
     () => ({
@@ -397,6 +558,21 @@ function App() {
     setPlan(null);
     setApplyResult(null);
   }
+  function resetTransfer() {
+    setTransferThreads([]);
+    setSelectedExportThreadIds([]);
+    setExportPackagePath('');
+    setExportQuery('');
+    setImportPackagePath('');
+    setImportPreview(null);
+    setSelectedImportThreadIds([]);
+    setImportQuery('');
+    setImportProvider('');
+    setWorkspacePathFrom('');
+    setWorkspacePathTo('');
+    setTransferResult(null);
+  }
+
 
   function providersExceptTarget(provider, source = scan) {
     const targetProvider = String(provider || '').trim();
@@ -435,6 +611,7 @@ function App() {
     if (!data) return;
     setDefaultsInfo(data);
     setRoot(data.root || '');
+    resetTransfer();
     resetPlan();
     if (data.rootExists) refreshBackups(data.root, false);
     if (showStatus) {
@@ -449,6 +626,54 @@ function App() {
     });
   }, []);
 
+  useEffect(() => {
+    if (!backupProviderOptions.length) {
+      setSelectedConfigProvider('');
+      setBackupProviderDraft('');
+      setApplyBackupConfig(false);
+      return;
+    }
+    const selectionStillValid = backupProviderOptions.some((item) => item.configModelProvider === selectedConfigProvider);
+    const next = selectionStillValid ? selectedConfigProvider : backupProviderOptions[0].configModelProvider;
+    setSelectedConfigProvider(next);
+    setBackupProviderDraft((value) => selectionStillValid && value.trim() ? value : next);
+    setApplyBackupConfig(true);
+  }, [backupProviderOptions]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!root || !selectedAuthBackup) {
+      setBackupContent(null);
+      setBackupAuthDraft('');
+      setAuthDisplayNameDraft('');
+      setApplyBackupAuth(false);
+      return () => { cancelled = true; };
+    }
+
+    setBackupContent(null);
+    setBusy('backup-content');
+    api.backupContent({ root, backupPath: selectedAuthBackup })
+      .then((result) => {
+        if (cancelled) return;
+        if (!result.ok) throw new Error(result.error?.message || '读取备份内容失败');
+        const data = result.data;
+        setBackupContent(data);
+        setBackupAuthDraft(data.auth?.content || '');
+        setAuthDisplayNameDraft(selectedAuthBackupInfo?.authDisplayName || selectedAuthBackupInfo?.name || '');
+        setApplyBackupAuth(false);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setStatus({ tone: 'error', text: '读取备份内容失败' });
+        log(`[ERROR] ${error.message}`);
+      })
+      .finally(() => {
+        if (!cancelled) setBusy('');
+      });
+
+    return () => { cancelled = true; };
+  }, [root, selectedAuthBackup, selectedAuthBackupInfo?.authDisplayName]);
+
   function updateRoot(value) {
     setRoot(value);
     setScan(null);
@@ -456,8 +681,15 @@ function App() {
     setOldProviders([]);
     setIncludeSubagents(null);
     setBackups([]);
-    setSelectedBackup('');
+    setSelectedRollbackBackup('');
+    setSelectedConfigProvider('');
+    setSelectedAuthBackup('');
+    setBackupContent(null);
+    setBackupProviderDraft('');
+    setBackupAuthDraft('');
+    setAuthDisplayNameDraft('');
     resetPlan();
+    resetTransfer();
   }
 
   async function browseRoot() {
@@ -477,8 +709,11 @@ function App() {
     }
     const data = await call('backups', () => api.backups({ root: nextRoot }));
     if (!data) return;
-    setBackups(data.backups || []);
-    setSelectedBackup((value) => (data.backups || []).some((item) => item.path === value) ? value : data.backups?.[0]?.path || '');
+    const nextBackups = dedupeBackups(data.backups || []);
+    const nextAuthBackups = uniqueAuthBackups(nextBackups);
+    setBackups(nextBackups);
+    setSelectedRollbackBackup((value) => nextBackups.some((item) => item.path === value) ? value : nextBackups[0]?.path || '');
+    setSelectedAuthBackup((value) => nextAuthBackups.some((item) => item.path === value) ? value : nextAuthBackups[0]?.path || '');
     if (showStatus) {
       setStatus({ tone: data.backups?.length ? 'good' : 'warn', text: data.backups?.length ? '已刷新备份列表' : '没有找到备份' });
       log(`Backups found: ${data.backups?.length || 0}`);
@@ -639,21 +874,139 @@ function App() {
     log(`Commit complete: JSONL=${data.jsonlChanged}, Index=${data.indexLines}`);
     refreshBackups(root, false);
   }
+  function toggleTransferThread(setter, id) {
+    setter((items) => items.includes(id) ? items.filter((item) => item !== id) : [...items, id]);
+  }
+
+  async function handleLoadTransferThreads() {
+    if (!root) {
+      warn('请先填写作为导出源的 Root Directory');
+      return;
+    }
+    setStatus({ tone: 'info', text: '正在读取可打包聊天...' });
+    const data = await call('transfer-threads', () => api.transferThreads({ root }));
+    if (!data) return;
+    setTransferThreads(data.threads || []);
+    setSelectedExportThreadIds([]);
+    setExportQuery('');
+    setTransferResult(null);
+    const ready = (data.threads || []).filter((thread) => thread.exportable).length;
+    setStatus({ tone: ready ? 'good' : 'warn', text: ready ? '已读取可选择聊天，请勾选需要打包的条目' : '没有找到可打包的聊天正文' });
+    log('Transfer source loaded: chats=' + (data.threads || []).length + ', exportable=' + ready);
+    if (data.sessionIssues?.length) log('[WARN] 发现 ' + data.sessionIssues.length + ' 个无法读取的 JSONL 文件');
+  }
+
+  async function handleChooseExportPackage() {
+    const selected = await api.selectExportFile();
+    if (selected) setExportPackagePath(selected);
+  }
+
+  async function handleExportTransfer() {
+    if (!selectedExportThreadIds.length) {
+      warn('请先勾选要打包的聊天');
+      return;
+    }
+    let outputPath = exportPackagePath.trim();
+    if (!outputPath) {
+      outputPath = await api.selectExportFile() || '';
+      if (!outputPath) return;
+      setExportPackagePath(outputPath);
+    }
+    const yes = window.confirm('确认导出已选聊天？\n\n将打包 ' + selectedExportThreadIds.length + ' 条聊天到迁移包。\n\n迁移包包含聊天正文和线程元数据，但不包含 auth.json、登录 token 或 API Key。');
+    if (!yes) return;
+    setStatus({ tone: 'info', text: '正在生成迁移包...' });
+    const data = await call('export-transfer', () => api.exportTransfer({
+      root,
+      threadIds: selectedExportThreadIds,
+      outputPath,
+    }));
+    if (!data) return;
+    setExportPackagePath(data.packagePath || outputPath);
+    setTransferResult({ kind: 'export', ...data });
+    setStatus({ tone: data.skipped?.length ? 'warn' : 'good', text: data.skipped?.length ? '迁移包已生成，部分聊天被跳过' : '迁移包已生成' });
+    log('Transfer package exported: chats=' + data.exported + ', path=' + data.packagePath);
+    if (data.skipped?.length) log('[WARN] Export skipped: ' + data.skipped.length);
+  }
+
+  async function handleInspectTransfer(nextPath = importPackagePath) {
+    const packagePath = String(nextPath || '').trim();
+    if (!packagePath) {
+      warn('请先选择迁移包');
+      return;
+    }
+    setStatus({ tone: 'info', text: '正在检查迁移包...' });
+    const data = await call('inspect-transfer', () => api.inspectTransfer({ root, packagePath }));
+    if (!data) return;
+    setImportPackagePath(packagePath);
+    setImportPreview(data);
+    setSelectedImportThreadIds((data.threads || []).filter((thread) => thread.canImport).map((thread) => thread.id));
+    setImportQuery('');
+    setImportProvider((value) => value || data.suggestedTarget || target.trim());
+    setTransferResult(null);
+    setStatus({ tone: data.schemaCompatible ? 'good' : 'warn', text: data.schemaCompatible ? '迁移包检查完成，请勾选要导入的聊天' : '迁移包与当前状态数据库不兼容' });
+    log('Transfer package checked: new=' + (data.counts?.new || 0) + ', duplicate=' + (data.counts?.duplicate || 0) + ', conflict=' + (data.counts?.conflict || 0));
+  }
+
+  async function handleChooseImportPackage() {
+    const selected = await api.selectImportFile();
+    if (!selected) return;
+    setImportPackagePath(selected);
+    setImportPreview(null);
+    setSelectedImportThreadIds([]);
+    await handleInspectTransfer(selected);
+  }
+
+  async function handleImportTransfer() {
+    if (!importPreview?.schemaCompatible) {
+      warn('请先选择并检查兼容的迁移包');
+      return;
+    }
+    if (!selectedImportThreadIds.length) {
+      warn('请至少勾选一条可导入聊天');
+      return;
+    }
+    if (Boolean(workspacePathFrom.trim()) !== Boolean(workspacePathTo.trim())) {
+      warn('工作区路径映射需同时填写旧路径和新路径，或同时留空');
+      return;
+    }
+    const yes = window.confirm('确认导入已选聊天？\n\n将导入 ' + selectedImportThreadIds.length + ' 条聊天到当前 Root Directory。\n\n操作前会自动备份目标状态；同 ID 冲突的聊天不会被覆盖。auth.json、登录 token 和 API Key 不会迁移。');
+    if (!yes) return;
+    setStatus({ tone: 'info', text: '正在导入迁移包...' });
+    const data = await call('import-transfer', () => api.importTransfer({
+      root,
+      packagePath: importPackagePath,
+      threadIds: selectedImportThreadIds,
+      targetProvider: importProvider.trim(),
+      workspacePathFrom: workspacePathFrom.trim(),
+      workspacePathTo: workspacePathTo.trim(),
+    }));
+    if (!data) return;
+    setTransferResult({ kind: 'import', ...data });
+    setSelectedImportThreadIds([]);
+    setScan(null);
+    resetPlan();
+    setStatus({ tone: data.passed ? 'good' : 'warn', text: data.passed ? '聊天导入完成' : '聊天已导入，但验证有警告' });
+    log('Transfer import complete: chats=' + (data.imported?.length || 0) + ', JSONL=' + (data.jsonlImported || 0));
+    if (data.backup) log('Import safety backup: ' + data.backup);
+    if (data.postError) log('[WARN] Post-import verification: ' + data.postError);
+    refreshBackups(root, false);
+  }
+
 
   async function handleRestoreBackup() {
-    if (!selectedBackup) {
+    if (!selectedRollbackBackup) {
       warn('请先选择一个备份');
       return;
     }
-    if (!selectedBackupInfo?.hasStateDb) {
+    if (!selectedRollbackBackupInfo?.hasStateDb) {
       warn('所选备份只包含 auth.json，不能用于回滚恢复设置');
       return;
     }
-    const label = selectedBackupInfo?.name || selectedBackup;
-    const yes = window.confirm(`确认回滚恢复设置？\n\n${label}\n\n工具会先备份当前状态，然后从所选备份读取 provider、thread_source、归档状态和 config provider，并写回当前 Codex 状态。\n\n不会覆盖聊天正文，不会把 rollout JSONL 整个恢复到旧版本，也不会删除备份之后新增的聊天内容。\n\nauth.json 请使用单独的“恢复 auth.json”按钮。建议先关闭或重启 Codex 桌面端，避免文件被占用。`);
+    const label = selectedRollbackBackupInfo?.name || selectedRollbackBackup;
+    const yes = window.confirm(`确认回滚恢复设置？\n\n${label}\n\n工具会先备份当前状态，然后从所选备份读取 provider、thread_source、归档状态和 config provider，并写回当前 Codex 状态。\n\n不会覆盖聊天正文，不会把 rollout JSONL 整个恢复到旧版本，也不会删除备份之后新增的聊天内容。\n\nauth.json 不随此操作恢复；需要时请在“备份版本内容”中单独选择并应用。建议先关闭或重启 Codex 桌面端，避免文件被占用。`);
     if (!yes) return;
     setStatus({ tone: 'info', text: '正在回滚恢复设置...' });
-    const data = await call('restore-backup', () => api.restoreBackup({ root, backupPath: selectedBackup }));
+    const data = await call('restore-backup', () => api.restoreBackup({ root, backupPath: selectedRollbackBackup }));
     if (!data) return;
     setScan(null);
     resetPlan();
@@ -665,80 +1018,141 @@ function App() {
     refreshBackups(root, false);
   }
 
+  async function handleApplyBackupContent() {
+    if (!applyBackupConfig && !applyBackupAuth) {
+      warn('请至少选择 config.toml 或 auth.json');
+      return;
+    }
+    if (applyBackupConfig && !backupProviderDraft.trim()) {
+      warn('config.toml Provider 不能为空');
+      return;
+    }
+    if (applyBackupAuth && (!selectedAuthBackup || !backupContent)) {
+      warn('请先选择并加载一个 auth.json 版本');
+      return;
+    }
+    if (applyBackupAuth && !backupAuthDraft.trim()) {
+      warn('auth.json 内容不能为空');
+      return;
+    }
+
+    const selected = [
+      applyBackupConfig ? `config.toml provider: ${backupProviderDraft.trim() || '(移除顶层 model_provider)'}` : '',
+      applyBackupAuth ? '完整 auth.json' : '',
+    ].filter(Boolean).join('\n');
+    const yes = window.confirm(`确认应用编辑后的备份内容？\n\n${selected}\n\n这些内容会写入当前 Codex root，但不会修改原备份。执行前会自动创建完整安全备份。`);
+    if (!yes) return;
+
+    setStatus({ tone: 'info', text: '正在应用备份内容...' });
+    const data = await call('apply-backup-content', () => api.applyBackupContent({
+      root,
+      authBackupPath: selectedAuthBackup,
+      applyConfig: applyBackupConfig,
+      configProvider: backupProviderDraft,
+      applyAuth: applyBackupAuth,
+      authJson: backupAuthDraft,
+    }));
+    if (!data) return;
+    setScan(null);
+    resetPlan();
+    setStatus({ tone: 'good', text: '所选备份内容已应用' });
+    log(`Selected backup content applied: config=${Boolean(data.config)}, auth=${Boolean(data.auth)}`);
+    log(`Safety backup created: ${data.safetyBackup}`);
+    refreshBackups(root, false);
+  }
+
   async function handleSaveAuthSnapshot() {
     if (!String(root || '').trim()) {
       warn('请先填写 Root Directory');
       return;
     }
-    const yes = window.confirm(`确认保存当前 auth.json？\n\n工具会把当前 Codex root 下的 auth.json 保存为一个专用认证快照。\n\n这个操作不会修改聊天记录、provider 或 config.toml。auth.json 可能包含登录凭据，请不要分享生成的备份文件夹。`);
+    const authDisplayName = window.prompt('为这个 auth.json 版本设置名称：', `认证快照 ${new Date().toLocaleString()}`);
+    if (authDisplayName === null) return;
+    if (!authDisplayName.trim()) {
+      warn('auth.json 版本名称不能为空');
+      return;
+    }
+    const yes = window.confirm(`确认保存当前 auth.json？\n\n名称：${authDisplayName.trim()}\n\n工具会把当前 Codex root 下的 auth.json 保存为一个专用认证快照。\n\n这个操作不会修改聊天记录、provider 或 config.toml。auth.json 可能包含登录凭据，请不要分享生成的备份文件夹。`);
     if (!yes) return;
     setStatus({ tone: 'info', text: '正在保存 auth.json...' });
-    const data = await call('save-auth-snapshot', () => api.saveAuthSnapshot({ root }));
+    const data = await call('save-auth-snapshot', () => api.saveAuthSnapshot({ root, authDisplayName: authDisplayName.trim() }));
     if (!data) return;
-    setStatus({ tone: data.skipped?.length ? 'warn' : 'good', text: data.skipped?.length ? 'auth.json 已保存，有文件跳过' : 'auth.json 快照已保存' });
+    const duplicateCount = data.cleanup?.deleted?.length || 0;
+    setStatus({
+      tone: data.skipped?.length ? 'warn' : 'good',
+      text: data.skipped?.length
+        ? 'auth.json 已保存，有文件跳过'
+        : duplicateCount
+          ? `auth.json 已保存，自动清理 ${duplicateCount} 个重复快照`
+          : 'auth.json 快照已保存',
+    });
     log(`Auth snapshot saved: ${data.backup}`);
     log(`Auth snapshot status: ${authStatusMeta(data.auth).label}`);
+    if (duplicateCount) log(`Duplicate auth snapshots removed automatically: ${duplicateCount}`);
     refreshBackups(root, false);
   }
 
-  async function handleRestoreAuthBackup() {
-    if (!selectedBackup) {
-      warn('请先选择一个备份');
+  async function handleRenameAuthVersion() {
+    if (!selectedAuthBackup) {
+      warn('请先选择一个 auth.json 版本');
       return;
     }
-    if (!selectedBackupInfo?.hasAuthJson) {
-      warn('所选备份不包含 auth.json，无法恢复认证文件');
+    const displayName = authDisplayNameDraft.trim();
+    if (!displayName) {
+      warn('auth.json 版本名称不能为空');
       return;
     }
-    const label = selectedBackupInfo?.name || selectedBackup;
-    const authLabel = authStatusMeta(selectedBackupInfo?.auth).label;
-    const yes = window.confirm(`确认从这个备份恢复 auth.json？\n\n${label}\n备份认证状态：${authLabel}\n\n这只恢复认证文件，不迁移聊天记录。工具会先备份当前状态，然后把所选备份里的 auth.json 写回 Codex root。它不会生成或伪造 GPT/ChatGPT 账号登录态。`);
-    if (!yes) return;
-    setStatus({ tone: 'info', text: '正在恢复 auth.json...' });
-    const data = await call('restore-auth-backup', () => api.restoreAuthBackup({ root, backupPath: selectedBackup }));
+    const data = await call('rename-backup-auth', () => api.renameBackupAuth({
+      root,
+      backupPath: selectedAuthBackup,
+      authDisplayName: displayName,
+    }));
     if (!data) return;
-    setScan(null);
-    resetPlan();
-    setStatus({ tone: data.skipped?.length ? 'warn' : 'good', text: data.skipped?.length ? 'auth.json 已恢复，有文件跳过' : 'auth.json 已恢复' });
-    log(`Auth restored from backup: ${data.backup}`);
-    log(`Safety backup created: ${data.safetyBackup}`);
-    log(`Auth change: ${authStatusMeta(data.previousAuth).label} -> ${authStatusMeta(data.restoredAuth).label}`);
+    setStatus({ tone: 'good', text: 'auth.json 版本名称已保存' });
+    log(`Auth version renamed: ${data.authDisplayName}`);
     refreshBackups(root, false);
   }
 
-  async function handleCleanupAuthSnapshots() {
-    const preview = await call('cleanup-auth-snapshots', () => api.cleanupAuthSnapshots({ root, yes: false }));
-    if (!preview) return;
-    if (!preview.duplicateCount) {
-      setStatus({ tone: 'good', text: '没有重复 auth 快照' });
-      log(`No duplicate auth snapshots. Total=${preview.total}, unique=${preview.uniqueCount}`);
+  async function handleDeleteVersionBackup(kind) {
+    const isProvider = kind === 'provider';
+    const selected = isProvider ? selectedConfigProviderInfo : selectedAuthBackupInfo;
+    if (!selected?.path) {
+      warn(isProvider ? '请先选择一个 Provider 版本' : '请先选择一个 auth.json 版本');
       return;
     }
-    const names = (preview.duplicates || []).slice(0, 6).map((item) => item.name).join('\n');
-    const more = preview.duplicateCount > 6 ? `\n...以及另外 ${preview.duplicateCount - 6} 个` : '';
-    const yes = window.confirm(`确认清理重复 auth 快照？\n\n工具只会删除“保存当前 auth.json”生成的专用认证快照，并且只删除 auth.json 内容完全相同的旧副本。\n\n完整恢复备份不会因为 auth.json 重复而被删除。\n\n将删除 ${preview.duplicateCount} 个重复快照：\n${names}${more}`);
+    const versionLabel = isProvider
+      ? `Provider: ${selected.configModelProvider}`
+      : `auth.json: ${selected.authDisplayName || selected.name}`;
+    const relatedContent = isProvider
+      ? (selected.hasAuthJson ? '\n\n此备份也包含 auth.json，删除后对应的 auth.json 版本也可能从列表中移除。' : '')
+      : (selected.configModelProvider ? '\n\n此备份也包含 Provider，删除后对应的 Provider 版本也可能从列表中移除。' : '');
+    const yes = window.confirm(`确认删除当前版本对应的备份？\n\n${versionLabel}\n来源备份: ${selected.name}${relatedContent}\n\n只删除这个备份文件夹，不会删除当前 .codex 配置、认证文件或聊天记录。`);
     if (!yes) return;
-    setStatus({ tone: 'info', text: '正在清理重复 auth 快照...' });
-    const data = await call('cleanup-auth-snapshots', () => api.cleanupAuthSnapshots({ root, yes: true }));
+
+    const action = isProvider ? 'delete-provider-version-backup' : 'delete-auth-version-backup';
+    setStatus({ tone: 'info', text: isProvider ? '正在删除当前 Provider 备份...' : '正在删除当前 auth.json 备份...' });
+    const data = await call(action, () => api.deleteBackup({ root, backupPath: selected.path }));
     if (!data) return;
-    setSelectedBackup('');
-    setStatus({ tone: 'good', text: '重复 auth 快照已清理' });
-    log(`Duplicate auth snapshots deleted: ${data.deleted.length}, unique=${data.uniqueCount}`);
-    refreshBackups(root, false);
+    if (selectedRollbackBackup === selected.path) setSelectedRollbackBackup('');
+    if (selectedAuthBackup === selected.path) setSelectedAuthBackup('');
+    await refreshBackups(root, false);
+    setStatus({ tone: 'good', text: isProvider ? '当前 Provider 备份已删除' : '当前 auth.json 备份已删除' });
+    log(`${isProvider ? 'Provider' : 'Auth'} version backup deleted: ${data.deleted}`);
   }
 
   async function handleDeleteBackup() {
-    if (!selectedBackup) {
+    if (!selectedRollbackBackup) {
       warn('请先选择一个备份');
       return;
     }
-    const label = selectedBackupInfo?.name || selectedBackup;
+    const label = selectedRollbackBackupInfo?.name || selectedRollbackBackup;
     const yes = window.confirm(`确认删除这个备份？\n\n${label}\n\n删除后，这个备份将无法再用于回滚。此操作只会删除选中的备份文件夹，不会删除 .codex 主目录或聊天记录。`);
     if (!yes) return;
     setStatus({ tone: 'info', text: '正在删除备份...' });
-    const data = await call('delete-backup', () => api.deleteBackup({ root, backupPath: selectedBackup }));
+    const data = await call('delete-backup', () => api.deleteBackup({ root, backupPath: selectedRollbackBackup }));
     if (!data) return;
-    setSelectedBackup('');
+    setSelectedRollbackBackup('');
+    if (selectedAuthBackup === selectedRollbackBackup) setSelectedAuthBackup('');
     setStatus({ tone: 'good', text: '备份已删除' });
     log(`Backup deleted: ${data.deleted}`);
     refreshBackups(root, false);
@@ -764,7 +1178,8 @@ function App() {
     setStatus({ tone: 'info', text: '正在删除过期备份...' });
     const data = await call('cleanup-backups', () => api.cleanupBackups({ root, keep, yes: true }));
     if (!data) return;
-    setSelectedBackup('');
+    setSelectedRollbackBackup('');
+    setSelectedAuthBackup('');
     setStatus({ tone: 'good', text: '过期备份已删除' });
     log(`Expired backups deleted: ${data.deleted.length}, kept=${data.keep}`);
     refreshBackups(root, false);
@@ -912,120 +1327,6 @@ function App() {
               </div>
             </Panel>
 
-            <Panel>
-              <SectionHeader
-                icon={RotateCcw}
-                title="备份回滚"
-                eyebrow="Safety"
-                accent="emerald"
-                action={<Button tone="soft" onClick={() => refreshBackups(root)} busy={busy === 'backups'} className="min-h-9 px-3 text-[12px]">刷新备份</Button>}
-              />
-
-              <div className="space-y-4">
-                <Field label="Backup Snapshot" hint={backups.length ? `${backups.length} 个备份` : '暂无备份'}>
-                  <select
-                    value={selectedBackup}
-                    onChange={(e) => setSelectedBackup(e.target.value)}
-                    className={inputClass}
-                  >
-                    {backups.length ? backups.map((item) => (
-                      <option key={item.path} value={item.path}>
-                        {item.name}
-                      </option>
-                    )) : <option value="">暂无本工具备份</option>}
-                  </select>
-                </Field>
-
-                <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-[12px] text-slate-600">
-                  {selectedBackupInfo ? (
-                    <div className="space-y-1.5">
-                      <div className="flex justify-between gap-3">
-                        <span className="font-semibold text-slate-700">备份类型</span>
-                        <span className="text-right">{selectedBackupInfo.authSnapshot ? 'auth.json 快照' : '完整恢复备份'}</span>
-                      </div>
-                      <div className="flex justify-between gap-3">
-                        <span className="font-semibold text-slate-700">创建时间</span>
-                        <span className="text-right">{new Date(selectedBackupInfo.createdAt).toLocaleString()}</span>
-                      </div>
-                      <div className="flex justify-between gap-3">
-                        <span className="font-semibold text-slate-700">目标 Provider</span>
-                        <span className="max-w-[220px] truncate font-mono text-slate-800">{selectedBackupInfo.targetProvider || '-'}</span>
-                      </div>
-                      <div className="flex justify-between gap-3">
-                        <span className="font-semibold text-slate-700">认证文件</span>
-                        <span className={cx('max-w-[220px] truncate rounded-full border px-2 py-0.5 text-[11px] font-semibold', selectedBackupInfo.hasAuthJson ? authToneClass(selectedBackupAuthMeta.tone) : 'border-slate-200 bg-white text-slate-500')}>
-                          {selectedBackupInfo.hasAuthJson ? selectedBackupAuthMeta.label : '不包含 auth.json'}
-                        </span>
-                      </div>
-                      {selectedBackupInfo.authHash ? (
-                        <div className="flex justify-between gap-3">
-                          <span className="font-semibold text-slate-700">认证指纹</span>
-                          <span className="font-mono text-slate-700">{selectedBackupInfo.authHash.slice(0, 12)}</span>
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : (
-                    <span className="font-medium text-slate-400">选择备份后显示详情</span>
-                  )}
-                </div>
-
-                <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3">
-                  <div className="mb-3">
-                    <div className="text-[13px] font-semibold text-emerald-950">auth.json 快照</div>
-                    <p className="mt-1 text-[12px] leading-5 text-emerald-800/80">手动保存当前认证文件；重复清理只处理这些专用快照，不删除完整恢复备份。</p>
-                  </div>
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    <Button tone="soft" disabled={!root} busy={busy === 'save-auth-snapshot'} onClick={handleSaveAuthSnapshot}>
-                      保存当前 auth.json
-                    </Button>
-                    <Button tone="danger" disabled={!authSnapshotCount} busy={busy === 'cleanup-auth-snapshots'} onClick={handleCleanupAuthSnapshots}>
-                      清理重复 auth 快照
-                    </Button>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                  <Button tone="danger" disabled={!selectedBackup} busy={busy === 'delete-backup'} onClick={handleDeleteBackup}>
-                    删除当前备份
-                  </Button>
-                  <Button tone="soft" disabled={!selectedBackup || !selectedBackupInfo?.hasAuthJson} busy={busy === 'restore-auth-backup'} onClick={handleRestoreAuthBackup}>
-                    恢复 auth.json
-                  </Button>
-                  <Button tone="accent" disabled={!canRollbackSelectedBackup} busy={busy === 'restore-backup'} onClick={handleRestoreBackup}>
-                    回滚恢复设置
-                  </Button>
-                </div>
-
-                <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-[12px] leading-5 text-blue-900">
-                  <span className="font-semibold">说明：</span>
-                  `回滚恢复设置` 只从备份读取 provider、索引相关状态和 config provider，不覆盖聊天正文；`恢复 auth.json` 只恢复认证文件。
-                </div>
-
-                <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
-                  <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <div>
-                      <div className="text-[13px] font-semibold text-amber-950">过期备份清理</div>
-                      <p className="mt-1 text-[12px] leading-5 text-amber-800/80">保留最新的本工具备份，删除更旧的备份。</p>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-2">
-                      <span className="text-[12px] font-semibold text-amber-900">保留</span>
-                      <input
-                        type="number"
-                        min="1"
-                        step="1"
-                        value={backupKeepCount}
-                        onChange={(e) => setBackupKeepCount(e.target.value)}
-                        className="h-9 w-16 rounded-lg border border-amber-200 bg-white px-2 text-center text-[13px] font-semibold text-slate-900 outline-none transition focus:border-amber-400 focus:ring-4 focus:ring-amber-100"
-                      />
-                      <span className="text-[12px] font-semibold text-amber-900">个</span>
-                    </div>
-                  </div>
-                  <Button tone="danger" disabled={!backups.length} busy={busy === 'cleanup-backups'} onClick={handleCleanupBackups} className="w-full">
-                    删除过期备份
-                  </Button>
-                </div>
-              </div>
-            </Panel>
           </div>
 
           <div className="flex flex-col gap-6 lg:col-span-7">
@@ -1071,6 +1372,403 @@ function App() {
             </Panel>
           </div>
         </div>
+
+        <section className="mt-6 grid grid-cols-1 items-start gap-6 lg:grid-cols-2">
+          <Panel className="min-w-0">
+            <SectionHeader
+              icon={FileJson}
+              title="聊天迁移包：导出"
+              eyebrow="Step A · Source"
+              accent="blue"
+              action={<Button tone="soft" onClick={handleLoadTransferThreads} busy={busy === 'transfer-threads'} className="min-h-9 px-3 text-[12px]">读取聊天</Button>}
+            />
+
+            <div className="space-y-4">
+              <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-[12px] leading-5 text-blue-900">
+                当前 <code className="rounded bg-white/80 px-1 font-mono">{root || 'Root Directory'}</code> 是导出源。读取后请逐条勾选需要打包的聊天；迁移包不会包含 <code className="rounded bg-white/80 px-1 font-mono">auth.json</code>、token 或 API Key。
+              </div>
+
+              <div className="flex items-center justify-between gap-3 text-[12px]">
+                <span className="font-semibold text-slate-700">已选择 {selectedExportThreadIds.length} 条</span>
+                <span className="text-slate-500">共 {transferThreads.length} 条</span>
+              </div>
+
+              <TransferThreadPicker
+                threads={transferThreads}
+                selectedIds={selectedExportThreadIds}
+                mode="export"
+                query={exportQuery}
+                onQueryChange={setExportQuery}
+                onToggle={(id) => toggleTransferThread(setSelectedExportThreadIds, id)}
+                onSelectAll={setSelectedExportThreadIds}
+                onClear={() => setSelectedExportThreadIds([])}
+                emptyText={transferThreads.length ? '没有符合筛选条件的聊天' : '点击“读取聊天”后，在此选择需要打包的聊天'}
+              />
+
+              <Field label="迁移包保存位置" hint="单个压缩 .codex-history 文件">
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Input value={exportPackagePath} onChange={(event) => setExportPackagePath(event.target.value)} placeholder="选择或输入保存路径" />
+                  <Button tone="soft" onClick={handleChooseExportPackage} className="shrink-0">选择位置</Button>
+                </div>
+              </Field>
+
+              <Button tone="primary" disabled={!selectedExportThreadIds.length} busy={busy === 'export-transfer'} onClick={handleExportTransfer} className="w-full">
+                <FileJson className="h-4 w-4" />导出已选聊天
+              </Button>
+
+              {transferResult?.kind === 'export' ? (
+                <div className={cx('rounded-lg border px-3 py-3 text-[12px] leading-5', transferResult.skipped?.length ? 'border-amber-200 bg-amber-50 text-amber-900' : 'border-emerald-200 bg-emerald-50 text-emerald-900')}>
+                  已导出 {transferResult.exported} 条聊天，文件大小 {Math.ceil((transferResult.bytes || 0) / 1024)} KB。
+                  <span className="mt-1 block break-all font-mono text-[10px] opacity-80">{transferResult.packagePath}</span>
+                </div>
+              ) : null}
+            </div>
+          </Panel>
+
+          <Panel className="min-w-0">
+            <SectionHeader
+              icon={ArchiveRestore}
+              title="聊天迁移包：导入"
+              eyebrow="Step B · Target"
+              accent="orange"
+              action={<Button tone="soft" onClick={() => handleInspectTransfer()} busy={busy === 'inspect-transfer'} disabled={!importPackagePath.trim()} className="min-h-9 px-3 text-[12px]">重新检查</Button>}
+            />
+
+            <div className="space-y-4">
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] leading-5 text-amber-900">
+                当前 <code className="rounded bg-white/80 px-1 font-mono">{root || 'Root Directory'}</code> 是导入目标。导入前会自动备份；相同 ID 且内容不同的聊天会标记冲突，不会被覆盖。
+              </div>
+
+              <Field label="迁移包文件">
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Input value={importPackagePath} onChange={(event) => { setImportPackagePath(event.target.value); setImportPreview(null); }} placeholder="选择或输入 .codex-history 文件" />
+                  <Button tone="soft" onClick={handleChooseImportPackage} className="shrink-0">选择文件</Button>
+                  <Button onClick={() => handleInspectTransfer()} disabled={!importPackagePath.trim()} busy={busy === 'inspect-transfer'} className="shrink-0">检查</Button>
+                </div>
+              </Field>
+
+              {importPreview ? (
+                <>
+                  <div className={cx('rounded-lg border px-3 py-2 text-[12px] leading-5', importPreview.schemaCompatible ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-rose-200 bg-rose-50 text-rose-900')}>
+                    {importPreview.schemaCompatible
+                      ? '数据库结构兼容：可导入的新聊天默认已勾选。'
+                      : '数据库结构不兼容：为保护目标数据，导入已禁用。'}
+                    <span className="mt-1 block">可导入 {importPreview.counts?.new || 0} · 已存在 {importPreview.counts?.duplicate || 0} · 冲突 {importPreview.counts?.conflict || 0}</span>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-3 text-[12px]">
+                    <span className="font-semibold text-slate-700">已选择 {selectedImportThreadIds.length} 条</span>
+                    <span className="text-slate-500">包内 {importPreview.total} 条</span>
+                  </div>
+
+                  <TransferThreadPicker
+                    threads={importPreview.threads || []}
+                    selectedIds={selectedImportThreadIds}
+                    mode="import"
+                    query={importQuery}
+                    onQueryChange={setImportQuery}
+                    onToggle={(id) => toggleTransferThread(setSelectedImportThreadIds, id)}
+                    onSelectAll={setSelectedImportThreadIds}
+                    onClear={() => setSelectedImportThreadIds([])}
+                    emptyText="迁移包中没有符合筛选条件的聊天"
+                  />
+
+                  <Field label="导入后 Provider" hint="留空则保留导出时的 Provider，不会修改 config.toml">
+                    <div className="flex gap-2">
+                      <input list="import-provider-options" value={importProvider} onChange={(event) => setImportProvider(event.target.value)} className={cx(inputClass, 'flex-1')} placeholder="例如 openai" />
+                      <datalist id="import-provider-options">
+                        {[...new Set([...providerOptions, importPreview.suggestedTarget].filter(Boolean))].map((provider) => <option key={provider} value={provider} />)}
+                      </datalist>
+                    </div>
+                  </Field>
+
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <Field label="旧工作区路径" hint="可选路径映射">
+                      <Input value={workspacePathFrom} onChange={(event) => setWorkspacePathFrom(event.target.value)} placeholder="D:\\old\\repo" />
+                    </Field>
+                    <Field label="新工作区路径" hint="两项同时填写">
+                      <Input value={workspacePathTo} onChange={(event) => setWorkspacePathTo(event.target.value)} placeholder="E:\\new\\repo" />
+                    </Field>
+                  </div>
+
+                  <Button tone="primary" disabled={!importPreview.schemaCompatible || !selectedImportThreadIds.length} busy={busy === 'import-transfer'} onClick={handleImportTransfer} className="w-full">
+                    <ArchiveRestore className="h-4 w-4" />导入已选聊天
+                  </Button>
+                </>
+              ) : (
+                <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-5 py-8 text-center text-[12px] leading-5 text-slate-500">
+                  选择迁移包并点击“检查”后，可逐条选择要导入的聊天。
+                </div>
+              )}
+
+              {transferResult?.kind === 'import' ? (
+                <div className={cx('rounded-lg border px-3 py-3 text-[12px] leading-5', transferResult.passed ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-amber-200 bg-amber-50 text-amber-900')}>
+                  已导入 {transferResult.imported?.length || 0} 条聊天，写入 {transferResult.jsonlImported || 0} 个 JSONL 文件。
+                  {transferResult.backup ? <span className="mt-1 block break-all font-mono text-[10px] opacity-80">安全备份：{transferResult.backup}</span> : null}
+                  {transferResult.postError ? <span className="mt-1 block">验证提示：{transferResult.postError}</span> : null}
+                </div>
+              ) : null}
+            </div>
+          </Panel>
+        </section>
+
+
+        <section className="mt-6 grid grid-cols-1 items-start gap-6 lg:grid-cols-2">
+          <Panel className="min-w-0">
+            <SectionHeader
+              icon={RotateCcw}
+              title="备份回滚"
+              eyebrow="Safety"
+              accent="emerald"
+              action={<Button tone="soft" onClick={() => refreshBackups(root)} busy={busy === 'backups'} className="min-h-9 px-3 text-[12px]">刷新备份</Button>}
+            />
+
+            <div className="space-y-4">
+              <Field label="回滚备份" hint={uniqueBackups.length ? `${uniqueBackups.length} 个去重备份` : '暂无备份'}>
+                <select
+                  value={selectedRollbackBackup}
+                  onChange={(e) => setSelectedRollbackBackup(e.target.value)}
+                  className={inputClass}
+                >
+                  {uniqueBackups.length ? uniqueBackups.map((item) => (
+                    <option key={item.path} value={item.path}>
+                      {item.name}
+                    </option>
+                  )) : <option value="">暂无本工具备份</option>}
+                </select>
+              </Field>
+
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-[12px] text-slate-600">
+                {selectedRollbackBackupInfo ? (
+                  <div className="space-y-1.5">
+                    <div className="flex justify-between gap-3">
+                      <span className="font-semibold text-slate-700">备份类型</span>
+                      <span className="text-right">{selectedRollbackBackupInfo.authSnapshot ? 'auth.json 快照' : '完整恢复备份'}</span>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <span className="font-semibold text-slate-700">创建时间</span>
+                      <span className="text-right">{new Date(selectedRollbackBackupInfo.createdAt).toLocaleString()}</span>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <span className="font-semibold text-slate-700">目标 Provider</span>
+                      <span className="max-w-[220px] truncate font-mono text-slate-800">{selectedRollbackBackupInfo.targetProvider || '-'}</span>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <span className="font-semibold text-slate-700">认证文件</span>
+                      <span className={cx('max-w-[220px] truncate rounded-full border px-2 py-0.5 text-[11px] font-semibold', selectedRollbackBackupInfo.hasAuthJson ? authToneClass(selectedRollbackBackupAuthMeta.tone) : 'border-slate-200 bg-white text-slate-500')}>
+                        {selectedRollbackBackupInfo.hasAuthJson ? selectedRollbackBackupAuthMeta.label : '不包含 auth.json'}
+                      </span>
+                    </div>
+                    {selectedRollbackBackupInfo.authHash ? (
+                      <div className="flex justify-between gap-3">
+                        <span className="font-semibold text-slate-700">认证指纹</span>
+                        <span className="font-mono text-slate-700">{selectedRollbackBackupInfo.authHash.slice(0, 12)}</span>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : (
+                  <span className="font-medium text-slate-400">选择备份后显示详情</span>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <Button tone="danger" disabled={!selectedRollbackBackup} busy={busy === 'delete-backup'} onClick={handleDeleteBackup}>
+                  删除当前备份
+                </Button>
+                <Button tone="accent" disabled={!canRollbackSelectedBackup} busy={busy === 'restore-backup'} onClick={handleRestoreBackup}>
+                  回滚恢复设置
+                </Button>
+              </div>
+
+              <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-[12px] leading-5 text-blue-900">
+                <span className="font-semibold">说明：</span>
+                回滚只读取备份中的归属和索引设置，不覆盖当前聊天正文，也不删除备份之后新增的聊天。
+              </div>
+
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+                <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <div className="text-[13px] font-semibold text-amber-950">过期备份清理</div>
+                    <p className="mt-1 text-[12px] leading-5 text-amber-800/80">保留最新的本工具备份，删除更旧的备份。</p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <span className="text-[12px] font-semibold text-amber-900">保留</span>
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={backupKeepCount}
+                      onChange={(e) => setBackupKeepCount(e.target.value)}
+                      className="h-9 w-16 rounded-lg border border-amber-200 bg-white px-2 text-center text-[13px] font-semibold text-slate-900 outline-none transition focus:border-amber-400 focus:ring-4 focus:ring-amber-100"
+                    />
+                    <span className="text-[12px] font-semibold text-amber-900">个</span>
+                  </div>
+                </div>
+                <Button tone="danger" disabled={!uniqueBackups.length} busy={busy === 'cleanup-backups'} onClick={handleCleanupBackups} className="w-full">
+                  删除过期备份
+                </Button>
+              </div>
+            </div>
+          </Panel>
+
+          <Panel className="min-w-0">
+            <SectionHeader
+              icon={FileJson}
+              title="备份版本内容"
+              eyebrow="Snapshot Inspector"
+              accent="emerald"
+              action={<Button tone="soft" onClick={() => refreshBackups(root)} busy={busy === 'backups' || busy === 'backup-content'} className="min-h-9 px-3 text-[12px]">刷新备份</Button>}
+            />
+
+            <div className="space-y-5">
+              <div className="border-b border-slate-200 pb-5">
+                <Field label="Provider 版本" hint={backupProviderOptions.length ? `${backupProviderOptions.length} 个去重 Provider` : '暂无 Provider'}>
+                  <select
+                    value={selectedConfigProvider}
+                    onChange={(e) => {
+                      setSelectedConfigProvider(e.target.value);
+                      setBackupProviderDraft(e.target.value);
+                    }}
+                    className={inputClass}
+                  >
+                    {backupProviderOptions.length ? backupProviderOptions.map((item) => (
+                      <option key={item.configModelProvider.toLowerCase()} value={item.configModelProvider}>{item.configModelProvider}</option>
+                    )) : <option value="">备份中没有 config.toml Provider</option>}
+                  </select>
+                </Field>
+
+                {selectedConfigProviderInfo ? (
+                  <div className="mt-2 flex flex-col gap-1 text-[11px] text-slate-500 sm:flex-row sm:items-center sm:justify-between">
+                    <span className="truncate">来源 {selectedConfigProviderInfo.name}</span>
+                    <span>{new Date(selectedConfigProviderInfo.createdAt).toLocaleString()}</span>
+                  </div>
+                ) : null}
+
+                <label className="mb-3 mt-4 flex min-h-9 cursor-pointer items-center justify-between gap-4">
+                  <span>
+                    <span className="block text-[13px] font-semibold text-slate-900">config.toml Provider</span>
+                    <span className="mt-0.5 block text-[12px] text-slate-500">选择后仍可编辑最终写入值</span>
+                  </span>
+                  <span className="flex shrink-0 items-center gap-2 text-[12px] font-semibold text-slate-700">
+                    <input type="checkbox" checked={applyBackupConfig} disabled={!backupProviderOptions.length} onChange={(e) => setApplyBackupConfig(e.target.checked)} className="h-4 w-4 accent-orange-600 disabled:opacity-40" />
+                    应用
+                  </span>
+                </label>
+                <Input
+                  value={backupProviderDraft}
+                  onChange={(e) => setBackupProviderDraft(e.target.value)}
+                  disabled={!backupProviderOptions.length}
+                  aria-label="config.toml Provider 最终值"
+                  placeholder="备份中没有可用 Provider"
+                />
+                <Button
+                  tone="danger"
+                  disabled={!selectedConfigProviderInfo}
+                  busy={busy === 'delete-provider-version-backup'}
+                  onClick={() => handleDeleteVersionBackup('provider')}
+                  className="mt-3 w-full"
+                >
+                  <Trash2 className="h-4 w-4" />删除当前 Provider 备份
+                </Button>
+              </div>
+
+              <div className="border-b border-slate-200 pb-5">
+                <Field label="auth.json 版本" hint={authBackupOptions.length ? `${authBackupOptions.length} 个去重认证版本` : '暂无认证版本'}>
+                  <select
+                    value={selectedAuthBackup}
+                    onChange={(e) => setSelectedAuthBackup(e.target.value)}
+                    className={inputClass}
+                  >
+                    {authBackupOptions.length ? authBackupOptions.map((item) => (
+                      <option key={item.path} value={item.path}>{item.authDisplayName || item.name}</option>
+                    )) : <option value="">备份中没有 auth.json</option>}
+                  </select>
+                </Field>
+
+                <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                  <Input
+                    value={authDisplayNameDraft}
+                    onChange={(e) => setAuthDisplayNameDraft(e.target.value)}
+                    disabled={!selectedAuthBackup}
+                    aria-label="auth.json 版本名称"
+                    placeholder="设置 auth.json 版本名称"
+                  />
+                  <Button tone="soft" disabled={!selectedAuthBackup || !authDisplayNameDraft.trim()} busy={busy === 'rename-backup-auth'} onClick={handleRenameAuthVersion} className="shrink-0">
+                    <Save className="h-4 w-4" />保存名称
+                  </Button>
+                  <Button tone="soft" disabled={!root} busy={busy === 'save-auth-snapshot'} onClick={handleSaveAuthSnapshot} className="shrink-0">
+                    保存当前 auth.json
+                  </Button>
+                </div>
+
+                <Button
+                  tone="danger"
+                  disabled={!selectedAuthBackupInfo}
+                  busy={busy === 'delete-auth-version-backup'}
+                  onClick={() => handleDeleteVersionBackup('auth')}
+                  className="mt-3 w-full"
+                >
+                  <Trash2 className="h-4 w-4" />删除当前 auth.json 备份
+                </Button>
+
+                <p className="mt-2 text-[11px] leading-5 text-slate-500">新快照保存后会自动删除内容相同的旧 auth 专用快照，普通恢复备份不受影响。</p>
+
+                {selectedAuthBackupInfo ? (
+                  <div className="mt-2 flex flex-col gap-1 text-[11px] text-slate-500 sm:flex-row sm:items-center sm:justify-between">
+                    <span>指纹 {selectedAuthBackupInfo.authHash?.slice(0, 12) || '-'}</span>
+                    <span>{new Date(selectedAuthBackupInfo.createdAt).toLocaleString()}</span>
+                  </div>
+                ) : null}
+
+                <label className="mb-3 mt-4 flex min-h-9 cursor-pointer items-center justify-between gap-4">
+                  <span>
+                    <span className="block text-[13px] font-semibold text-slate-900">完整 auth.json</span>
+                    <span className="mt-0.5 block text-[12px] text-rose-600">包含认证凭据和 token，请勿截图或分享</span>
+                  </span>
+                  <span className="flex shrink-0 items-center gap-2 text-[12px] font-semibold text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={applyBackupAuth}
+                      disabled={!backupContent?.auth?.exists}
+                      onChange={(e) => setApplyBackupAuth(e.target.checked)}
+                      className="h-4 w-4 accent-orange-600 disabled:opacity-40"
+                    />
+                    应用
+                  </span>
+                </label>
+
+                {!selectedAuthBackup ? (
+                  <div className="flex min-h-[280px] items-center justify-center rounded-lg border border-dashed border-slate-300 bg-slate-50 px-6 text-center text-[13px] font-medium text-slate-500">
+                    没有可用的 auth.json 版本
+                  </div>
+                ) : !backupContent ? (
+                  <div className="flex min-h-[280px] items-center justify-center text-[13px] font-medium text-slate-500">正在读取 auth.json...</div>
+                ) : (
+                  <textarea
+                    value={backupAuthDraft}
+                    onChange={(e) => setBackupAuthDraft(e.target.value)}
+                    spellCheck="false"
+                    aria-label="备份 auth.json 内容"
+                    className="min-h-[280px] w-full resize-y rounded-lg border border-slate-200 bg-slate-950 p-4 font-mono text-[12px] leading-5 text-slate-100 outline-none transition focus:border-orange-400 focus:ring-4 focus:ring-orange-100"
+                  />
+                )}
+              </div>
+
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-[12px] leading-5 text-slate-500">Provider 与 auth.json 独立选择，可分别应用或一起应用；原备份内容不变。</p>
+                <Button
+                  tone="primary"
+                  disabled={!canApplyBackupContent}
+                  busy={busy === 'apply-backup-content'}
+                  onClick={handleApplyBackupContent}
+                  className="shrink-0"
+                >
+                  <Save className="h-4 w-4" />应用已选内容
+                </Button>
+              </div>
+            </div>
+          </Panel>
+        </section>
       </main>
     </div>
   );
